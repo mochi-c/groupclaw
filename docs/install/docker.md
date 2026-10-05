@@ -30,7 +30,36 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
     ./scripts/docker/setup.sh
     ```
 
-    This builds the Gateway image locally as `openclaw:local`. To use a pre-built image instead:
+    This builds the Gateway image locally as `openclaw:local`.
+
+    For a fork or another named local image, use `--local`:
+
+    ```bash
+    OPENCLAW_IMAGE="groupclaw:local" ./scripts/docker/setup.sh --local
+    ```
+
+    `--local` always builds the image from the current checkout, writes the
+    selected image name to `.env`, and starts Compose with `--pull never
+    --no-build`. This separates the source build from runtime startup and
+    prevents Compose from replacing the freshly built image with a registry
+    image. It is not an offline build: Docker may still download base images
+    and package dependencies while compiling the checkout. After changing
+    source code, rebuild and restart without repeating onboarding:
+
+    ```bash
+    OPENCLAW_IMAGE="groupclaw:local" \
+      OPENCLAW_SKIP_ONBOARDING=1 \
+      ./scripts/docker/setup.sh --local
+    ```
+
+    Once the image and `.env` exist, start the existing local image without a
+    rebuild or registry pull:
+
+    ```bash
+    docker compose up -d --pull never --no-build openclaw-gateway
+    ```
+
+    To use a pre-built image instead:
 
     ```bash
     export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"

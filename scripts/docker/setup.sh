@@ -22,6 +22,7 @@ RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
 SKIP_ONBOARDING=""
 DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"
 OFFLINE_MODE=""
+LOCAL_BUILD_MODE=""
 DEFAULT_SANDBOX_IMAGE="openclaw-sandbox:bookworm-slim"
 DEFAULT_SANDBOX_BROWSER_IMAGE="openclaw-sandbox-browser:bookworm-slim"
 SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH="2026-05-12-cdp-relay-auth"
@@ -33,6 +34,9 @@ fail() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --local)
+      LOCAL_BUILD_MODE="1"
+      ;;
     --offline)
       OFFLINE_MODE="1"
       ;;
@@ -42,6 +46,10 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ -n "$LOCAL_BUILD_MODE" && -n "$OFFLINE_MODE" ]]; then
+  fail "--local and --offline cannot be used together."
+fi
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -180,7 +188,7 @@ sync_gateway_config() {
 
 run_compose_one_off() {
   local -a run_args=(run)
-  if [[ -n "$OFFLINE_MODE" ]]; then
+  if [[ -n "$OFFLINE_MODE" || -n "$LOCAL_BUILD_MODE" ]]; then
     run_args+=(--pull never)
   fi
   docker compose "${COMPOSE_ARGS[@]}" "${run_args[@]}" "$@"
@@ -215,7 +223,7 @@ run_runtime_cli() {
 
   local -a compose_args
   local -a run_args=(run)
-  if [[ -n "$OFFLINE_MODE" ]]; then
+  if [[ -n "$OFFLINE_MODE" || -n "$LOCAL_BUILD_MODE" ]]; then
     run_args+=(--pull never)
   fi
   run_args+=(--rm)
@@ -248,7 +256,7 @@ run_gateway_up() {
     *) fail "Unknown gateway compose scope: $compose_scope" ;;
   esac
 
-  if [[ -n "$OFFLINE_MODE" ]]; then
+  if [[ -n "$OFFLINE_MODE" || -n "$LOCAL_BUILD_MODE" ]]; then
     up_args+=(--pull never --no-build)
   fi
   up_args+=("$@")
@@ -751,7 +759,7 @@ upsert_env "$ENV_FILE" \
 if [[ -n "$OFFLINE_MODE" ]]; then
   require_local_docker_image "$IMAGE_NAME"
   echo "==> Using preloaded Docker image: $IMAGE_NAME"
-elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
+elif [[ -n "$LOCAL_BUILD_MODE" || "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
   BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"

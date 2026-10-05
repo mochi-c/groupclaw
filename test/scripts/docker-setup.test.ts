@@ -353,6 +353,37 @@ describe("scripts/docker/setup.sh", () => {
     },
   );
 
+  it("builds a custom local image and starts without pulling or rebuilding", async () => {
+    await resetDockerLog(sandbox);
+    const image = "groupclaw:local";
+    const result = runDockerSetup(
+      sandbox,
+      {
+        OPENCLAW_IMAGE: image,
+        OPENCLAW_SKIP_ONBOARDING: "1",
+      },
+      ["--local"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Building Docker image: ${image}`);
+    const lines = await readDockerLogLines(sandbox);
+    const log = lines.join("\n");
+    expect(log).toMatch(new RegExp(`^build .* -t ${image} `, "m"));
+    expect(log).not.toMatch(/^pull /m);
+    expectOfflineComposePolicy(lines);
+
+    const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain(`OPENCLAW_IMAGE=${image}`);
+  });
+
+  it("rejects combining local-build and offline modes", () => {
+    const result = runDockerSetup(sandbox, {}, ["--local", "--offline"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("--local and --offline cannot be used together");
+  });
+
   it("offline sandbox stays disabled when its configured image is missing", async () => {
     await mkdir(join(sandbox.rootDir, "scripts", "docker", "sandbox"), { recursive: true });
     await writeFile(
