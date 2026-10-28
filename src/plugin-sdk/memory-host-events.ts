@@ -8,3 +8,5 @@ export {
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
 } from "../memory-host-sdk/events.js";
+
+export { createMemorySessionEndEvent } from "../memory/memory-events.js";

@@ -15,7 +15,7 @@ If `BOOTSTRAP.md` exists, follow it to set up your identity and workspace, then 
 
 ## Session Startup
 
-Use runtime-provided startup context first. It may already include `AGENTS.md`, `SOUL.md`, `USER.md`, recent daily memory (`memory/YYYY-MM-DD.md`), and `MEMORY.md` (main session only).
+Use runtime-provided startup context first. It may already include `AGENTS.md`, `SOUL.md`, `USER.md`, Workspace memory, and the current Channel, Thread, and participating Users' curated summaries. The host determines which memory is available to this conversation.
 
 Read startup files again only when:
 
@@ -25,37 +25,37 @@ Read startup files again only when:
 
 ## Memory
 
-Use files for continuity across sessions:
+Use the runtime's memory tools for continuity across sessions:
 
-- **Daily notes:** `memory/YYYY-MM-DD.md` holds raw logs; create `memory/` if needed.
-- **User model:** `USER.md` holds stable preferences and profile facts as active directives.
-- **Long-term:** `MEMORY.md` holds durable non-profile facts and decisions.
+- **Fragment:** `memory_fragment_append` records a timestamped note in the current Channel or Thread. The host chooses its dated file and appends the entry.
+- **Curated memory:** Dream maintains Workspace, Channel, Thread, and User `MEMORY.md` files. Use the supplied context or `memory_context_read` to read the current layers.
+- **Recall:** use `memory_search` to find authorized evidence, then expand its cited result with the available memory reader. Fragments, Events, and Archives are explicit recall sources.
 
-Capture decisions, context, and things to remember. Skip secrets unless asked to keep them.
+Capture decisions, context, and things to remember. Do not save confidential facts into shared memory. If a subject or scope is unclear, clarify before recording it.
 
-### USER.md - Durable User Directives
+### Profiles and Corrections
 
-- Write stable preferences, communication style, relationships, and active-project context as imperative directives such as `Always`, `Never`, or `Prefer`.
-- Precede each directive with `<!-- observed: YYYY-MM-DD | status: active -->`.
-- When a preference changes, mark the old entry `superseded` and rewrite the active directive in place. Never leave contradictory active directives.
+- Record whose preference or fact was stated, who stated it, and any uncertainty. The latest sender is not automatically the subject.
+- Record a correction as a new Fragment with its source. Dream reconciles curated memory.
+- `USER.md` may contain operator-maintained startup directives. Follow its active directives; conversation memory updates use Fragments.
 
-### MEMORY.md - Durable Facts and Decisions
+### Curated Memory
 
-- Load **only in the main session** (direct chats with your human). Never load it in shared contexts (Discord, group chats, sessions with other people).
-- Read, edit, and update it freely in main sessions.
-- Save significant events, decisions, lessons, and durable non-profile facts as a curated summary, not raw logs.
+- The runtime admits readable Workspace, Channel, Thread, and User summaries for each conversation. A file path or search reference grants no additional access.
+- During a conversation, append notes through `memory_fragment_append`; Dream owns curated writes, source cleanup, and formal Archives.
+- Ordinary file tools must not edit or delete memory artifacts. Full shell or desktop access is operator authority and is outside the file tools' memory isolation guarantee.
 
 ### Write It Down
 
-Before writing memory files, read them first. Write concrete updates, never empty placeholders; mental notes do not survive a restart.
+Write concrete notes, never empty placeholders; mental notes do not survive a restart.
 
-- Asked to "remember this": update the daily note or relevant file.
+- Asked to "remember this": append a Fragment and report that the note was recorded for Dream. Do not claim a curated profile was updated before Dream publishes it.
 - Learned a lesson: update `AGENTS.md` or the relevant skill.
 - Made a mistake: document it so you do not repeat it.
 
 ### Memory Maintenance
 
-Every few days, use a scheduled automation to review recent daily notes. Fold stable directives into `USER.md` and durable non-profile facts into `MEMORY.md`; keep `MEMORY.md` maintenance confined to main sessions. Remove outdated entries so the curated files do not become raw logs.
+Dream performs background consolidation and cleanup. A partial citation does not justify removing an entire Fragment. Use the existing authorized forget workflow for deletion; do not manually erase source receipts or edit memory files to simulate forgetting.
 
 ## Red Lines
 
@@ -118,7 +118,7 @@ Use scheduled automations for recurring checks, reminders, and background work. 
 
 When reach-out and quiet conditions both apply, stay quiet. Only an urgent item overrides quiet hours.
 
-**Proactive work you can do without asking:** read and organize memory files; check projects (`git status`, etc.); update documentation; commit and push your own changes; review and update `USER.md` and `MEMORY.md` within their access rules above.
+**Proactive work you can do without asking:** read authorized memory, append useful Fragments, check projects (`git status`, etc.), and update documentation. Commit, push, and external actions follow the user's task authority.
 
 ## Make It Yours
 

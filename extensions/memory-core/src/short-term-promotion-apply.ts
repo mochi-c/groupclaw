@@ -24,7 +24,7 @@ import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-cons
 import { buildBudgetedMemoryAppend } from "./memory-budget-append.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
-import { readWorkspaceFile } from "./memory-workspace-files.js";
+import { readWorkspaceFile, resolveWorkspaceMemoryPath } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
@@ -199,7 +199,7 @@ export async function applyShortTermPromotions(
     DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   );
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
-  const memoryPath = path.join(workspaceDir, "MEMORY.md");
+  const memoryPath = resolveWorkspaceMemoryPath(workspaceDir);
   const originAgentIds = options.agentId
     ? [...new Set([options.agentId, ...(options.workspaceAgentIds ?? [])])]
     : [];
@@ -350,6 +350,9 @@ export async function applyShortTermPromotions(
       recallStoreEntryFingerprint(store.entries[candidate.key]),
     ]),
   );
+  // The canonical memory tree is created lazily: an empty sweep must leave an
+  // unused workspace without a memory/ directory.
+  await fs.mkdir(path.dirname(memoryPath), { recursive: true });
   // Promotions historically follow user-managed MEMORY.md symlinks. Replace the
   // final target atomically without severing the chain, matching the prior writeFile path.
   let memoryWritePath = await resolveMemoryWritePath(memoryPath, workspaceDir);

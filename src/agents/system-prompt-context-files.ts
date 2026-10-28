@@ -83,8 +83,14 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
     lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
   }
   if (hasMemoryFile) {
+    const hasScopedMemory = files.some(
+      (file) =>
+        file.basename === "memory.md" && /(?:^|\/)memory\/(?:Channel|User)\//u.test(file.path),
+    );
     lines.push(
-      "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
+      hasScopedMemory
+        ? "Curated MEMORY.md files contain Workspace, Channel, Thread, or User facts and decisions. Their source paths identify the scope; use them when relevant unless higher-priority instructions override."
+        : "memory/MEMORY.md: Workspace-global durable facts and decisions; use when relevant unless higher-priority instructions override.",
     );
   }
   if (hasUserFile) {

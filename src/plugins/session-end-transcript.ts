@@ -1,3 +1,5 @@
+import type { MemorySourceSession } from "../memory/session-memory-context.js";
+
 type PluginHookEndedTranscriptUnavailableReason =
   | "conversation-access-required"
   | "no-stable-cutoff"
@@ -16,17 +18,26 @@ export type PluginHookEndedTranscriptReadResult = {
   truncated: boolean;
 };
 
-type PluginHookEndedTranscript =
-  | {
-      available: false;
-      reason: PluginHookEndedTranscriptUnavailableReason;
-    }
-  | {
-      available: true;
-      readTail(
-        options: PluginHookEndedTranscriptReadOptions,
-      ): Promise<PluginHookEndedTranscriptReadResult>;
-    };
+type EndedSessionFacts = {
+  /** Departing conversation facts; these do not grant publication authority. */
+  session?: MemorySourceSession;
+  /** Current hosts bind persistence to the admitted handler's lifetime. */
+  assertActive?: () => void;
+};
+
+type PluginHookEndedTranscript = EndedSessionFacts &
+  (
+    | {
+        available: false;
+        reason: PluginHookEndedTranscriptUnavailableReason;
+      }
+    | {
+        available: true;
+        readTail(
+          options: PluginHookEndedTranscriptReadOptions,
+        ): Promise<PluginHookEndedTranscriptReadResult>;
+      }
+  );
 
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -43,12 +54,14 @@ type SessionEndTranscriptAvailableSource = {
   ): Promise<PluginHookEndedTranscriptReadResult>;
 };
 
-export type SessionEndTranscriptSource =
-  | SessionEndTranscriptAvailableSource
-  | {
-      available: false;
-      reason: Exclude<PluginHookEndedTranscriptUnavailableReason, "conversation-access-required">;
-    };
+export type SessionEndTranscriptSource = EndedSessionFacts &
+  (
+    | SessionEndTranscriptAvailableSource
+    | {
+        available: false;
+        reason: Exclude<PluginHookEndedTranscriptUnavailableReason, "conversation-access-required">;
+      }
+  );
 
 const sessionEndTranscriptSource = Symbol("openclaw.sessionEndTranscriptSource");
 
@@ -80,11 +93,11 @@ function readSessionEndTranscriptSource(
   );
 }
 
-function createScopedAvailableEndedTranscript(
-  source: SessionEndTranscriptAvailableSource,
+function createScopedEndedTranscript(
+  source: SessionEndTranscriptSource,
   lifecycleSignal?: AbortSignal,
 ): {
-  capability: SessionEndTranscriptAvailableSource;
+  capability: SessionEndTranscriptSource;
   revoke(): void;
 } {
   let active = true;
@@ -92,18 +105,24 @@ function createScopedAvailableEndedTranscript(
     if (!active || lifecycleSignal?.aborted) {
       throw new Error("session_end transcript reader is no longer active");
     }
+    source.assertActive?.();
   };
   return {
-    capability: Object.freeze({
-      available: true,
-      async readTail(options: PluginHookEndedTranscriptReadOptions) {
-        assertActive();
-        const result = await source.readTail(options);
-        await Promise.resolve();
-        assertActive();
-        return result;
-      },
-    }),
+    capability: Object.freeze(
+      source.available
+        ? {
+            ...source,
+            assertActive,
+            async readTail(options: PluginHookEndedTranscriptReadOptions) {
+              assertActive();
+              const result = await source.readTail(options);
+              await Promise.resolve();
+              assertActive();
+              return result;
+            },
+          }
+        : { ...source, assertActive },
+    ),
     revoke() {
       active = false;
     },
@@ -114,10 +133,7 @@ export function createSessionEndTranscriptSourceLease(source: SessionEndTranscri
   source: SessionEndTranscriptSource;
   revoke(): void;
 } {
-  if (!source.available) {
-    return { source: Object.freeze({ ...source }), revoke() {} };
-  }
-  const scoped = createScopedAvailableEndedTranscript(source);
+  const scoped = createScopedEndedTranscript(source);
   return { source: scoped.capability, revoke: () => scoped.revoke() };
 }
 
@@ -139,10 +155,7 @@ export function projectSessionEndTranscriptContext(
     };
   }
   const source = readSessionEndTranscriptSource(context);
-  if (!source.available) {
-    return { context: { ...context, endedTranscript: Object.freeze({ ...source }) }, dispose() {} };
-  }
-  const scoped = createScopedAvailableEndedTranscript(source, lifecycleSignal);
+  const scoped = createScopedEndedTranscript(source, lifecycleSignal);
   return {
     context: { ...context, endedTranscript: scoped.capability },
     dispose: () => scoped.revoke(),

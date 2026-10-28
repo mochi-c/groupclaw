@@ -105,7 +105,7 @@ describe("memory forget", () => {
         "- Preserve an untargetable legacy fact.",
         "",
       ].join("\n");
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memoryContent);
+      await fs.writeFile(path.join(workspaceDir, "memory", "MEMORY.md"), memoryContent);
       await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\nCurated private profile.\n");
       const sourceSnippet = "User: Please remember violet-mongoose-42.";
       const assistantSnippet = "Assistant: The launch code is violet-mongoose-42.";
@@ -226,7 +226,7 @@ describe("memory forget", () => {
           .get(narrativeSessionId),
       ).toBeUndefined();
       const indexedFiles = [
-        { path: "MEMORY.md", source: "memory", originClass: "owner" },
+        { path: "memory/MEMORY.md", source: "memory", originClass: "owner" },
         {
           path: `memory/.dreams/session-corpus/2026-08-26.${corpusExtension}`,
           source: "memory",
@@ -313,7 +313,9 @@ describe("memory forget", () => {
           originRows: 2,
         },
       });
-      expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+      expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8")).toBe(
+        memoryContent,
+      );
       expect(
         db
           .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -332,7 +334,7 @@ describe("memory forget", () => {
         if (failure === "memory" || failure === "corpus") {
           const open = fs.open.bind(fs);
           const failedPath =
-            failure === "memory" ? path.join(workspaceDir, "MEMORY.md") : mixedCorpusPath;
+            failure === "memory" ? path.join(workspaceDir, "memory", "MEMORY.md") : mixedCorpusPath;
           const failedTempPrefix = `${failedPath}.forget.`;
           const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
             const target = args[0];
@@ -434,7 +436,10 @@ describe("memory forget", () => {
         }
       }
       expect(report).toEqual({ ...retryPreview, dryRun: false });
-      const survivingMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+      const survivingMemory = await fs.readFile(
+        path.join(workspaceDir, "memory", "MEMORY.md"),
+        "utf8",
+      );
       expect(survivingMemory).toContain("Curated operator fact.");
       expect(survivingMemory).toContain("Keep the clean fact.");
       expect(survivingMemory).toContain("Preserve an untargetable legacy fact.");
@@ -470,7 +475,10 @@ describe("memory forget", () => {
         (db.prepare("SELECT path FROM memory_index_sources").all() as Array<{ path: string }>).map(
           (row) => row.path,
         ),
-      ).toEqual(["MEMORY.md", "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst"]);
+      ).toEqual([
+        "memory/MEMORY.md",
+        "sessions/main/survivor.jsonl.deleted.2026-08-25T10-00-00.000Z.zst",
+      ]);
       expect(
         db
           .prepare("SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")

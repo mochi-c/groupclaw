@@ -223,6 +223,7 @@ describe("session hook context wiring", () => {
       const sessionId = "memory-reset-session";
       const storePath = await createStorePath(`memory-${reason}`);
       const workspaceDir = path.join(path.dirname(storePath), "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
       const automatic = reason === "daily" || reason === "idle";
       const cfg: OpenClawConfig = {
         agents: { defaults: { workspace: workspaceDir } },
@@ -281,7 +282,7 @@ describe("session hook context wiring", () => {
           });
         }
         await flushSessionMemoryWritesForTest();
-        const memoryDir = path.join(workspaceDir, "memory");
+        const memoryDir = path.join(workspaceDir, "memory", "Event");
         const files = await fs.readdir(memoryDir);
         expect(files).toHaveLength(1);
         const content = await fs.readFile(path.join(memoryDir, files[0]!), "utf8");

@@ -3,6 +3,10 @@ import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import type { PluginHookToolRequesterContext } from "../plugins/hook-types.js";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+} from "../plugins/memory-audience.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -57,6 +61,7 @@ import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
+import { ISOLATED_WORKSPACE_TOOL_ALLOW } from "./sandbox/tool-policy.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
@@ -89,13 +94,21 @@ export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 
 // Both SDK paths assemble the same options; only compatibility resolves delegate policy synchronously.
 function* assembleOpenClawCodingTools(
-  options?: OpenClawCodingToolsOptions,
+  inputOptions?: OpenClawCodingToolsOptions,
   skillReadResources?: SkillSnapshot["resolvedSkills"],
   onPolicyFilter?: (event: ToolPolicyFilterEvent) => void,
   preparedSurface?: { tools: AnyAgentTool[]; policy: ReturnType<typeof prepareCoreToolPolicy> },
 ): Generator<OpenClawToolsOptions, AnyAgentTool[], AnyAgentTool[]> {
   const preparedTools = preparedSurface?.tools;
-  const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
+  const sandbox = inputOptions?.sandbox?.enabled ? inputOptions.sandbox : undefined;
+  const options: OpenClawCodingToolsOptions | undefined = sandbox?.executionSignal
+    ? {
+        ...inputOptions,
+        abortSignal: inputOptions?.abortSignal
+          ? AbortSignal.any([inputOptions.abortSignal, sandbox.executionSignal])
+          : sandbox.executionSignal,
+      }
+    : inputOptions;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
     resolveMemoryFlushToolSetup(options);
   const cronSelfRemoveOnlyJobId =
@@ -109,6 +122,7 @@ function* assembleOpenClawCodingTools(
       ...options,
       agentId: options?.policyAgentId ?? options?.agentId,
       sandboxToolPolicy: sandbox?.tools,
+      isolatedWorkspace: sandbox?.isolatedWorkspace,
       pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     });
   const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
@@ -157,13 +171,24 @@ function* assembleOpenClawCodingTools(
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
   // Borrowed tool restrictions do not transfer ownership of the policy session's processes.
-  const scopeKey = resolveProcessToolScopeKey({
-    scopeKey: options?.exec?.scopeKey,
+  const processScope = resolveProcessToolScopeKey({
+    scopeKey: sandbox?.isolatedWorkspace ? undefined : options?.exec?.scopeKey,
     sessionKey: executionSessionKey,
     sessionId: options?.sessionId,
     agentId: executionAgentId,
   });
-  if (options?.oneShotCliRun && scopeKey && options.registerRunCleanup) {
+  const scopeKey =
+    sandbox?.isolatedWorkspace && processScope
+      ? `${processScope}:isolated:${options?.runId}`
+      : processScope;
+  if (sandbox?.isolatedWorkspace && (!options?.runId || !options.registerRunCleanup)) {
+    throw new Error("Isolated project execution requires an admitted run cleanup owner.");
+  }
+  if (
+    (options?.oneShotCliRun || sandbox?.isolatedWorkspace) &&
+    scopeKey &&
+    options?.registerRunCleanup
+  ) {
     const supervisor = getProcessSupervisor();
     // Sandbox runtimes retain their configured lifetime; host commands still
     // need tree cleanup, including elevated commands from sandboxed sessions.
@@ -182,7 +207,10 @@ function* assembleOpenClawCodingTools(
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
   const execRuntimeConfig = options?.exec?.config ?? options?.config;
   const preparedRunEnvironment =
-    preparedTools === undefined && execRuntimeConfig && executionAgentId
+    !sandbox?.isolatedWorkspace &&
+    preparedTools === undefined &&
+    execRuntimeConfig &&
+    executionAgentId
       ? prepareGitHubToolEnvironment({
           config: execRuntimeConfig,
           sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
@@ -191,7 +219,15 @@ function* assembleOpenClawCodingTools(
       : undefined;
   const sessionPermissionPolicy = options?.sessionPermissionPolicy;
   const coreToolPolicy =
-    preparedSurface?.policy ?? prepareCoreToolPolicy({ ...options, agentId }, execConfig);
+    preparedSurface?.policy ??
+    prepareCoreToolPolicy(
+      {
+        ...options,
+        agentId,
+        requireWorkspaceOnly: sandbox?.isolatedWorkspace ? true : options?.requireWorkspaceOnly,
+      },
+      execConfig,
+    );
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
@@ -262,6 +298,9 @@ function* assembleOpenClawCodingTools(
           skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
           skillInstructionDeliveryCache: options?.skillInstructionDeliveryCache,
           memoryWriteProvenance,
+          memoryAudience: options?.memoryAudience,
+          memorySessionKey: executionSessionKey,
+          memoryWorkspaceDir: workspaceRoot,
           execDefaults: {
             ...execDefaults,
             ...effectiveExecPolicy,
@@ -328,10 +367,12 @@ function* assembleOpenClawCodingTools(
       sandboxed: Boolean(sandbox),
       hasAutomationGrant: Boolean(cronCreatorAuthorityResolver || cronManagementGrant),
     });
-  const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    capabilityProfile.policy.explicitToolAllowlist,
-    runtimePluginToolGrant,
-  );
+  const pluginToolAllowlist = sandbox?.isolatedWorkspace
+    ? [...ISOLATED_WORKSPACE_TOOL_ALLOW]
+    : appendRuntimePluginToolGrant(
+        capabilityProfile.policy.explicitToolAllowlist,
+        runtimePluginToolGrant,
+      );
   const pluginToolDenylist = [
     ...capabilityProfile.policy.explicitToolDenylist,
     ...ownerOnlyCoreToolDenylist,
@@ -358,6 +399,12 @@ function* assembleOpenClawCodingTools(
   });
   const pluginToolOptions = {
     ...options,
+    assertInvocationCurrent: () => {
+      if (options?.memoryAudience) {
+        assertMemoryAudienceSession(options.memoryAudience, executionSessionKey);
+        assertMemoryAudienceCurrent(options.memoryAudience);
+      }
+    },
     agentSessionKey: options?.sessionKey,
     agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
     agentTo: options?.messageTo,

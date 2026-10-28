@@ -90,6 +90,8 @@ async function runShortTermDreamingPromotion(params: {
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
+  getConfig?: () => OpenClawConfig;
+  assertCurrent?: () => void;
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (!params.config.enabled) {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
@@ -181,6 +183,41 @@ async function runShortTermDreamingPromotion(params: {
   for (const { agentId, agentIds, workspaceDir } of workspaces) {
     const sweepNowMs = Date.now();
     try {
+      const { DREAMING_FRAGMENT_NAMESPACE, readMemoryCoreWorkspaceEntries } =
+        await import("./dreaming-state.js");
+      const scoped =
+        (
+          await readMemoryCoreWorkspaceEntries({
+            workspaceDir,
+            namespace: DREAMING_FRAGMENT_NAMESPACE,
+          })
+        ).length > 0;
+      if (scoped) {
+        if (
+          !agentId ||
+          !params.cfg ||
+          !params.subagent ||
+          !params.assertCurrent ||
+          !params.getConfig
+        ) {
+          params.logger.warn("memory-core: scoped Dream runtime is unavailable; retry next sweep.");
+          continue;
+        }
+        const { runFragmentDreaming } = await import("./dreaming-fragments.js");
+        await runFragmentDreaming({
+          agentId,
+          workspaceDir,
+          cfg: params.cfg,
+          getConfig: params.getConfig,
+          assertCurrent: params.assertCurrent,
+          subagent: params.subagent,
+          nowMs: sweepNowMs,
+          logger: params.logger,
+        });
+        // The notebook persists even after forget: an admitted Workspace never
+        // falls back to the retired transcript/recall promotion pipeline.
+        continue;
+      }
       const phaseResult = await runDreamingSweepPhases({
         agentId,
         workspaceDir,
@@ -613,15 +650,32 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           pluginConfig: resolveMemoryDreamingPluginConfig(currentConfig),
           cfg: currentConfig,
         });
-        return await runShortTermDreamingPromotion({
-          trigger: ctx.trigger,
-          agentId: ctx.agentId,
-          workspaceDir: ctx.workspaceDir,
-          cfg: currentConfig,
-          config,
-          logger: api.logger,
-          subagent: config.enabled ? api.runtime?.subagent : undefined,
-        });
+        const generation = gatewayLifecycleGeneration;
+        return await trackDreamingTask(
+          runShortTermDreamingPromotion({
+            trigger: ctx.trigger,
+            agentId: ctx.agentId,
+            workspaceDir: ctx.workspaceDir,
+            cfg: currentConfig,
+            config,
+            logger: api.logger,
+            subagent: config.enabled ? api.runtime?.subagent : undefined,
+            getConfig: resolveCurrentConfig,
+            assertCurrent: () => {
+              if (disposed || generation !== gatewayLifecycleGeneration) {
+                throw new Error("Dream service generation is no longer active");
+              }
+              if (
+                !resolveMemoryDeepDreamingConfig({
+                  cfg: resolveCurrentConfig(),
+                  pluginConfig: resolveMemoryDreamingPluginConfig(resolveCurrentConfig()),
+                }).enabled
+              ) {
+                throw new Error("Dream was disabled during the sweep");
+              }
+            },
+          }),
+        );
       } catch (err) {
         api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
         return undefined;

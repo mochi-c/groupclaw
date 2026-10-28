@@ -19,7 +19,10 @@ import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import "./src/memory/background-context.js";
 import {
   buildMemoryPromptSection,
+  MEMORY_CONTEXT_READ_TOOL_CONTRACT,
+  MEMORY_FRAGMENT_APPEND_TOOL_CONTRACT,
   MEMORY_GET_TOOL_CONTRACT,
+  MEMORY_READ_TOOL_CONTRACT,
   MEMORY_SEARCH_TOOL_CONTRACT,
   resolveMemoryToolContext,
   type MemoryToolContract,
@@ -30,9 +33,13 @@ import { prepareMemoryManagerReload } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
-type MemoryToolsModule = typeof import("./src/tools.js");
-
 const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
+const loadMemoryContextReadModule = createLazyRuntimeModule(
+  () => import("./src/tools.context-read.js"),
+);
+const loadMemoryFragmentAppendModule = createLazyRuntimeModule(
+  () => import("./src/tools.fragment-append.js"),
+);
 const loadStandingIntentsModule = createLazyRuntimeModule(
   () => import("./src/standing-intents.js"),
 );
@@ -47,7 +54,7 @@ const loadRuntimeProviderModule = createLazyRuntimeModule(
 function createLazyMemoryTool(params: {
   options: MemoryToolOptions;
   contract: MemoryToolContract;
-  load: (module: MemoryToolsModule, options: MemoryToolOptions) => AnyAgentTool | null;
+  load: (options: MemoryToolOptions) => Promise<AnyAgentTool | null>;
 }): AnyAgentTool | null {
   const initialContext = resolveMemoryToolContext(params.options);
   if (!initialContext) {
@@ -62,7 +69,7 @@ function createLazyMemoryTool(params: {
     parameters: params.contract.parameters,
     prepareArguments: params.contract.prepareArguments,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
-      toolPromise ??= loadMemoryToolsModule().then((module) => params.load(module, params.options));
+      toolPromise ??= params.load(params.options);
       const tool = await toolPromise;
       if (!tool) {
         return jsonResult({
@@ -162,6 +169,8 @@ function resolveMemoryToolOptions(
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
     conversationRecall: ctx.conversationRecall,
+    memoryAudience: ctx.memoryAudience,
+    assertMemoryAudienceCurrent: ctx.assertMemoryAudienceCurrent,
     activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
   };
@@ -169,8 +178,14 @@ function resolveMemoryToolOptions(
 
 function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRuntime {
   return {
+    supportsMemoryAudience: true,
     supportsWorkspaceMemoryReadSources: true,
     prepareReload: prepareMemoryManagerReload,
+    async recordEventSource(params) {
+      const { recordDreamEventSource } = await import("./src/dreaming-fragment-state.js");
+      params.assertCurrent();
+      await recordDreamEventSource(params);
+    },
     async getMemorySearchManager(params) {
       const { createMemoryRuntime } = await loadRuntimeProviderModule();
       return await createMemoryRuntime(host).getMemorySearchManager(params);
@@ -216,14 +231,25 @@ export default definePluginEntry({
     const memoryRuntime = createLazyMemoryRuntime(host);
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
+    api.on("session_end", async (event, ctx) => {
+      try {
+        const { captureDreamEndedSession } = await import("./src/dreaming-ended-session.js");
+        await captureDreamEndedSession(api, event, ctx);
+      } catch (error) {
+        api.logger.warn(`memory-core: ended session capture deferred: ${String(error)}`);
+      }
+    });
     api.registerMemoryCapability({
-      recallToolNames: ["memory_search", "memory_get"],
+      recallToolNames: ["memory_search", "memory_context_read", "memory_get", "memory_read"],
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,
       promptBuilder: (params) => {
         if (
           !params.availableTools.has("memory_search") &&
-          !params.availableTools.has("memory_get")
+          !params.availableTools.has("memory_context_read") &&
+          !params.availableTools.has("memory_get") &&
+          !params.availableTools.has("memory_read") &&
+          !params.availableTools.has("memory_fragment_append")
         ) {
           return [];
         }
@@ -236,7 +262,7 @@ export default definePluginEntry({
         });
         return context ? buildMemoryPromptSection(params) : [];
       },
-      flushPlanResolver: buildMemoryFlushPlan,
+      providerFlushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,
       publicArtifacts: {
         async listArtifacts(params) {
@@ -247,17 +273,49 @@ export default definePluginEntry({
       },
     });
 
-    for (const contract of [MEMORY_SEARCH_TOOL_CONTRACT, MEMORY_GET_TOOL_CONTRACT]) {
+    for (const contract of [
+      MEMORY_SEARCH_TOOL_CONTRACT,
+      MEMORY_CONTEXT_READ_TOOL_CONTRACT,
+      MEMORY_GET_TOOL_CONTRACT,
+      MEMORY_READ_TOOL_CONTRACT,
+      MEMORY_FRAGMENT_APPEND_TOOL_CONTRACT,
+    ]) {
       api.registerTool(
-        (ctx) =>
-          createLazyMemoryTool({
+        (ctx) => {
+          if (ctx.sessionKey && !ctx.oneShotCliRun && !ctx.memoryAudience) {
+            return null;
+          }
+          if (contract.name === "memory_context_read" && !ctx.memoryAudience?.context) {
+            return null;
+          }
+          if (
+            contract.name === "memory_fragment_append" &&
+            !ctx.memoryAudience?.context?.fragment
+          ) {
+            return null;
+          }
+          return createLazyMemoryTool({
             options: resolveMemoryToolOptions(ctx, host),
             contract,
-            load: (module, options) =>
-              contract.name === "memory_search"
-                ? module.createMemorySearchTool(options)
-                : module.createMemoryGetTool(options),
-          }),
+            load: async (options) => {
+              if (contract.name === "memory_context_read") {
+                const module = await loadMemoryContextReadModule();
+                return module.createMemoryContextReadTool(options);
+              }
+              if (contract.name === "memory_fragment_append") {
+                const module = await loadMemoryFragmentAppendModule();
+                return module.createMemoryFragmentAppendTool(options);
+              }
+              const module = await loadMemoryToolsModule();
+              if (contract.name === "memory_search") {
+                return module.createMemorySearchTool(options);
+              }
+              return contract.name === "memory_read"
+                ? module.createMemoryReadTool(options)
+                : module.createMemoryGetTool(options);
+            },
+          });
+        },
         { names: [contract.name] },
       );
     }

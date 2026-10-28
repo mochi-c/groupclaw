@@ -32,7 +32,7 @@ describe("Forget with origins committed by another workspace", () => {
       await seedMemoryForgetSession("target");
       const otherWorkspace = path.join(fixture.stateDir, "other-workspace");
       await fs.mkdir(otherWorkspace);
-      const memoryPath = path.join(fixture.workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(fixture.workspaceDir, "memory", "MEMORY.md");
       const survivor = "Unrelated amber detail stays.\n";
       const content =
         "<!-- openclaw-memory-promotion:late-lineage -->\n- Selected violet detail.\n" + survivor;

@@ -11,6 +11,7 @@ import {
 } from "./memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
+import type { ScopedMemoryContext } from "./scoped-memory-visibility.js";
 
 // Core owns this session-store error; Memory Core must preserve its exact code
 // without importing a core-internal module across the plugin boundary.
@@ -63,7 +64,10 @@ export function createMemoryTool(params: {
   options: MemoryToolOptions;
   contract: MemoryToolContract;
   execute: (
-    ctx: NonNullable<ReturnType<typeof resolveMemoryToolContext>>,
+    ctx: NonNullable<ReturnType<typeof resolveMemoryToolContext>> & {
+      memorySearchContext?: ScopedMemoryContext;
+      assertMemorySearchCurrent?: () => void;
+    },
   ) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
@@ -83,6 +87,29 @@ export function createMemoryTool(params: {
       if (!latestCtx) {
         throw new Error(
           "Memory is disabled for this agent. Enable memory search for this agent, then retry.",
+        );
+      }
+      const context = params.options.memoryAudience?.context;
+      if (
+        context?.group &&
+        ["memory_search", "memory_get", "memory_read"].includes(params.contract.name)
+      ) {
+        const { withMemorySearchContext } = await loadMemoryToolRuntime();
+        return await withMemorySearchContext(
+          {
+            options: params.options,
+            cfg: latestCtx.cfg,
+            agentId: latestCtx.agentId,
+            context,
+            signal,
+          },
+          async (scope) =>
+            await params.execute({ ...latestCtx, ...scope })(
+              toolCallId,
+              toolParams,
+              signal,
+              onUpdate,
+            ),
         );
       }
       return await params.execute(latestCtx)(toolCallId, toolParams, signal, onUpdate);

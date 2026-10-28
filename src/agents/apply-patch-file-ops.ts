@@ -5,6 +5,7 @@ import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-re
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { writeHostFile } from "./host-file-write.js";
+import type { MemoryFileAccess } from "./memory-file-access.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -30,6 +31,7 @@ export type ApplyPatchFileOptions = {
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  memoryFileAccess?: MemoryFileAccess;
 };
 
 type PatchCreateOutcome = "created" | "exists";
@@ -59,6 +61,19 @@ export async function createPatchTarget(params: {
 
 export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promise<PatchFileOps> {
   const assertCurrent = captureAgentToolSourceExecutionGuard(options.signal);
+  if (options.memoryFileAccess) {
+    const access = options.memoryFileAccess;
+    return withPatchMemoryWriteProvenance({
+      observer: options.memoryWriteProvenance,
+      operations: {
+        readFile: async (filePath) => decodeUtf8File(await access.readFile(filePath), filePath),
+        writeFile: access.writeFile,
+        createFileExclusive: access.createFileExclusive,
+        remove: access.remove,
+        mkdirp: access.mkdir,
+      },
+    });
+  }
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return withPatchMemoryWriteProvenance({

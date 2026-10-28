@@ -61,7 +61,7 @@ import {
   resolveActiveMemoryBackendConfig,
 } from "./memory-runtime.js";
 import { resetStandaloneMemoryRegistrySlot } from "./memory-runtime.test-support.js";
-import { hasMemoryRuntime } from "./memory-state.js";
+import { hasMemoryRuntime, usesLoadedMemoryAudience } from "./memory-state.js";
 
 function createRuntime() {
   return {
@@ -278,14 +278,19 @@ describe("memory runtime handles", () => {
   );
 
   it("tracks standalone managers without activating config-only lookups and rearms reused handles", async () => {
-    const { registry, runtime } = createRegistry();
+    const { registry, runtime } = createRegistry({
+      ...createRuntime(),
+      supportsMemoryAudience: true,
+    });
     mocks.loadPluginRegistryHandle.mockReturnValue(registry);
 
     expect(hasMemoryRuntime()).toBe(false);
+    expect(usesLoadedMemoryAudience(memoryConfig)).toBe(false);
     expect(resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "main" })).toEqual({
       backend: "builtin",
     });
     expect(hasMemoryRuntime()).toBe(false);
+    expect(usesLoadedMemoryAudience(memoryConfig)).toBe(true);
 
     await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
     expect(hasMemoryRuntime()).toBe(true);

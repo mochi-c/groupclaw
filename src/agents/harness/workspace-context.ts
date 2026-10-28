@@ -1,5 +1,6 @@
 import path from "node:path";
 import { prepareMemorySystemPromptAddition } from "../../context-engine/delegate.js";
+import { isCuratedMemoryRelativePath } from "../../memory/scoped-memory.js";
 import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
 import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
@@ -56,7 +57,7 @@ export async function prepareAgentWorkspaceContext(
         bootstrapFiles
           .filter(
             (file) =>
-              isRootMemoryPath(file.path, params.workspaceDir) &&
+              isWorkspaceMemoryPath(file.path, params.workspaceDir) &&
               !file.missing &&
               (file.content ?? "").trim().length > 0,
           )
@@ -69,7 +70,7 @@ export async function prepareAgentWorkspaceContext(
         (file) => !file.missing,
       )
     : memoryToolRouted
-      ? bootstrapFiles.filter((file) => !isRootMemoryPath(file.path, params.workspaceDir))
+      ? bootstrapFiles.filter((file) => !isWorkspaceMemoryPath(file.path, params.workspaceDir))
       : bootstrapFiles;
   const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) =>
     projectContextFile(file, params.projectPath),
@@ -109,7 +110,10 @@ export async function prepareAgentWorkspaceContext(
         !nativeProjectDocument &&
         !PERSONA_FILE_BASENAMES.has(basename) &&
         (!memoryToolRouted ||
-          !isRootMemoryPath(file.path, params.promptMemoryWorkspaceDir ?? params.workspaceDir)) &&
+          !isWorkspaceMemoryPath(
+            file.path,
+            params.promptMemoryWorkspaceDir ?? params.workspaceDir,
+          )) &&
         !isMissingContextFile(file)
       );
     }),
@@ -196,7 +200,7 @@ function projectContextFile(
   return projectPath ? { ...file, path: projectPath(file.path) } : file;
 }
 
-function isRootMemoryPath(filePath: string, workspaceDir: string): boolean {
+function isWorkspaceMemoryPath(filePath: string, workspaceDir: string): boolean {
   const normalized = filePath.trim();
   if (!normalized) {
     return false;
@@ -204,7 +208,9 @@ function isRootMemoryPath(filePath: string, workspaceDir: string): boolean {
   const absolutePath = path.isAbsolute(normalized)
     ? path.resolve(normalized)
     : path.resolve(workspaceDir, normalized);
-  return absolutePath === path.join(path.resolve(workspaceDir), "MEMORY.md");
+  return isCuratedMemoryRelativePath(
+    path.relative(path.resolve(workspaceDir), absolutePath).replaceAll(path.sep, "/"),
+  );
 }
 
 function contextFileBasename(filePath: string): string {

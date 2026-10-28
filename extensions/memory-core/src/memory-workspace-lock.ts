@@ -208,7 +208,31 @@ export async function withMemoryWorkspaceLock<T>(
   workspaceDir: string,
   task: () => Promise<T>,
 ): Promise<T> {
-  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  return withMemoryCoordinationLock(
+    memoryCoreWorkspaceStateKey(workspaceDir),
+    resolveLockPath(workspaceDir),
+    task,
+  );
+}
+
+/** One analysis job shares the existing lease owner without blocking conversation file writes. */
+export async function withMemoryDreamJob<T>(
+  workspaceDir: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  return withMemoryCoordinationLock(
+    `dream:${workspaceKey}`,
+    `${resolveLockPath(workspaceDir)}/dream`,
+    task,
+  );
+}
+
+async function withMemoryCoordinationLock<T>(
+  lockKey: string,
+  lockRef: string,
+  task: () => Promise<T>,
+): Promise<T> {
   const scope = findActiveWorkspaceLockScope(lockKey);
   if (scope) {
     // Each scope queues its children separately: nested calls can reenter,
@@ -220,7 +244,6 @@ export async function withMemoryWorkspaceLock<T>(
     );
     return await child;
   }
-  const lockRef = resolveLockPath(workspaceDir);
   const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
     namespace: SHORT_TERM_LOCK_NAMESPACE,
     maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,

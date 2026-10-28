@@ -12,6 +12,7 @@ import * as discordRuntime from "../runtime.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+import { resolveDiscordConversationRoute } from "./route-resolution.js";
 
 async function context(
   overrides: Record<string, unknown> = {},
@@ -25,6 +26,86 @@ async function context(
 }
 
 describe("discord message context", () => {
+  it.each([
+    { threadMode: "always", autoThread: false, groupScope: "main" },
+    { threadMode: "always", autoThread: true, groupScope: "main" },
+    { threadMode: "always", autoThread: false, groupScope: "per-group" },
+    { threadMode: "always", autoThread: true, groupScope: "per-group" },
+    { threadMode: "auto", autoThread: false, groupScope: "main" },
+    { threadMode: "auto", autoThread: true, groupScope: "main" },
+    { threadMode: "auto", autoThread: false, groupScope: "per-group" },
+    { threadMode: "auto", autoThread: true, groupScope: "per-group" },
+  ] as const)(
+    "keeps $threadMode Thread inheritance separate (auto=$autoThread, scope=$groupScope)",
+    async ({ threadMode, autoThread, groupScope }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cfg: OpenClawConfig = {
+          agents: { entries: { main: {} } },
+          session: { store: state.path("sessions.json"), groupScope },
+          channels: {
+            discord: {
+              guilds: {
+                "900": {
+                  channels: {
+                    "100": { members: ["1", "2"], threadMode },
+                    "101": { includeThreadStarter: false },
+                  },
+                },
+              },
+            },
+          },
+        };
+        const route = resolveDiscordConversationRoute({
+          cfg,
+          accountId: "default",
+          peer: { kind: "channel", id: autoThread ? "100" : "101" },
+          parentConversationId: autoThread ? undefined : "100",
+        });
+        const ctx = await createBaseDiscordMessageContext(
+          {
+            cfg,
+            discordConfig: { thread: { inheritParent: true } },
+            route,
+            baseSessionKey: route.sessionKey,
+            messageChannelId: autoThread ? "100" : "101",
+            threadChannel: autoThread ? null : { id: "101", name: "Planning" },
+            threadParentId: autoThread ? undefined : "100",
+            channelConfig: {
+              allowed: true,
+              autoThread,
+              includeThreadStarter: false,
+            },
+            client: {
+              rest: { get: async () => ({ thread: { id: "101" } }) },
+            },
+          },
+          { storePath: state.path("sessions.json") },
+        );
+        const result = await buildDiscordMessageProcessContext({
+          ctx,
+          text: "plan",
+          mediaList: [],
+        });
+        expect(result).not.toBeNull();
+        const payload = result!.ctxPayload;
+        expect(payload.MessageThreadId).toBe("101");
+        expect(payload.ThreadParentId).toBe("100");
+        const parentKey = "agent:main:discord:channel:100";
+        if (threadMode === "always") {
+          expect(payload.ParentSessionKey).toBeUndefined();
+          expect(payload.SessionKey).toBe("agent:main:discord:channel:101");
+          expect(payload.ModelParentSessionKey).toBe(parentKey);
+        } else if (groupScope === "per-group") {
+          expect(payload.SessionKey).toBe("agent:main:discord:channel:101");
+          expect(payload.ParentSessionKey).toBe(parentKey);
+        } else {
+          expect(payload.ParentSessionKey).toBeUndefined();
+          expect(payload.SessionKey).toBe(route.mainSessionKey);
+        }
+      });
+    },
+  );
+
   it.each([
     { sourceMessageIds: ["1000", "1001"], implicitCurrentMessage: "allow" },
     { sourceMessageIds: ["1001"], implicitCurrentMessage: "deny" },

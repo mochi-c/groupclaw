@@ -52,7 +52,7 @@ const { accent, heading, info, muted, success, warn } = theme;
 function formatSourceLabel(source: string, workspaceDir: string): string {
   if (source === "memory") {
     return shortenHomeInString(
-      `memory (MEMORY.md + ${path.join(workspaceDir, "memory")}${path.sep}*.md)`,
+      `memory (${path.join(workspaceDir, "memory")}${path.sep}**${path.sep}*.md)`,
     );
   }
   if (source === "sessions") {

@@ -1,4 +1,21 @@
+import type { MemoryEventHandle, MemoryEventOutcome } from "../memory/memory-events.js";
+import type { MemoryScope } from "../memory/scoped-memory.js";
+
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+
+export type MemoryFlushObservation = {
+  flushId: string;
+  runId: string;
+  compactionCount: number;
+  outcome: MemoryEventOutcome;
+};
+
+interface InternalHookContext extends Record<string, unknown> {
+  memoryFlush?: Omit<MemoryFlushObservation, "outcome"> & { outcome?: MemoryEventOutcome };
+  memoryEventScope?: MemoryScope;
+  onMemoryEventCreated?: (handle: MemoryEventHandle) => void;
+  assertCurrent?: () => void;
+}
 
 const KNOWN_INTERNAL_HOOK_EVENT_FAMILIES = [
   "command",
@@ -31,6 +48,7 @@ const KNOWN_INTERNAL_HOOK_EVENT_KEYS = [
   "session:auto-reset",
   "session:compact:after",
   "session:compact:before",
+  "session:memory-flush",
   "session:patch",
 ] as const;
 
@@ -49,7 +67,7 @@ export interface InternalHookEvent {
   /** The session key this event relates to */
   sessionKey: string;
   /** Additional context specific to the event */
-  context: Record<string, unknown>;
+  context: InternalHookContext;
   /** Timestamp when the event occurred */
   timestamp: Date;
   /** Messages to send back to the user (hooks can push to this array) */

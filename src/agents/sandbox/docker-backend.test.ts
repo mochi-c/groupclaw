@@ -122,7 +122,7 @@ describe("docker sandbox backend manager", () => {
     });
   });
 
-  it.each(["allocation", "mount inspection", "engine validation"] as const)(
+  it.each(["allocation", "mount inspection", "engine validation", "caller authority"] as const)(
     "rechecks authority after awaited %s before filesystem execution",
     async (stage) => {
       let current = true;
@@ -152,20 +152,31 @@ describe("docker sandbox backend manager", () => {
         agentWorkspaceDir: "/workspace",
         cfg: resolveSandboxConfigForAgent(createConfig()),
         assertRuntimeCurrent: () => {
-          if (!current) {
+          if (!current && stage !== "caller authority") {
             throw new Error(message);
           }
         },
       });
-      if (stage === "engine validation") {
+      if (stage === "engine validation" || stage === "caller authority") {
         const backend = await operation;
         dockerMocks.validateSandboxContainerEngineTarget.mockImplementationOnce(async () => {
           await Promise.resolve();
           current = false;
         });
-        await expect(backend.runShellCommand({ script: "write should not run" })).rejects.toThrow(
-          message,
-        );
+        await expect(
+          backend.runShellCommand({
+            script: "write should not run",
+            ...(stage === "caller authority"
+              ? {
+                  assertCurrent: () => {
+                    if (!current) {
+                      throw new Error(message);
+                    }
+                  },
+                }
+              : {}),
+          }),
+        ).rejects.toThrow(message);
         expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
       } else {
         await expect(operation).rejects.toThrow(message);

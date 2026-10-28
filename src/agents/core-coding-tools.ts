@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import {
@@ -33,6 +34,7 @@ import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
+import { createMemoryFileAccess } from "./memory-file-access.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { relativePathInsideSandboxRoot, resolvePathFromInput } from "./path-policy.js";
 import type { SandboxContext } from "./sandbox.js";
@@ -190,6 +192,9 @@ type CoreCodingToolsOptions = {
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  memoryAudience?: MemoryAudience;
+  memorySessionKey?: string;
+  memoryWorkspaceDir?: string;
   applyPatchEnabled: boolean;
   applyPatchWorkspaceOnly: boolean;
   applyPatchContainmentSource?: ApplyPatchContainmentSource;
@@ -200,9 +205,28 @@ type CoreCodingToolsOptions = {
 
 /** Materialize only the core file and shell families selected by the runtime owner. */
 export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgentTool[] {
+  if (
+    options.shellTools === "full" &&
+    options.memoryAudience?.kind === "conversation" &&
+    !options.sandbox?.isolatedWorkspace
+  ) {
+    throw new Error("Conversation scripts require an isolated project sandbox.");
+  }
   const sandbox = options.sandbox;
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
+  const memoryFileAccess =
+    options.memoryAudience?.context ||
+    options.memoryAudience?.kind === "conversation" ||
+    (options.memorySessionKey && !options.memoryAudience)
+      ? createMemoryFileAccess({
+          workspaceDir: options.memoryWorkspaceDir ?? options.containmentRoot,
+          audience: options.memoryAudience,
+          sessionKey: options.memorySessionKey,
+          abortSignal: options.abortSignal,
+          bridge: sandboxFsBridge,
+        })
+      : undefined;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   if (
     sandboxRoot &&
@@ -271,23 +295,25 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   const base: AnyAgentTool[] = [];
   if (options.includeBaseCodingTools) {
     const readDirectory = sandboxFsBridge?.readDirectory?.bind(sandboxFsBridge);
-    const listingOperations: LsOperations | undefined = readDirectory
-      ? {
-          readDirectory: (filePath, signal) =>
-            readDirectory({ filePath, cwd: sandbox?.containerWorkdir, signal }),
-        }
-      : options.workspaceOnly && !sandbox
+    const listingOperations: LsOperations | undefined = memoryFileAccess
+      ? { readDirectory: memoryFileAccess.readDirectory }
+      : readDirectory
         ? {
-            readDirectory: async (filePath) => {
-              const root = await fsRoot(options.containmentRoot);
-              return (
-                await root.list(path.relative(options.containmentRoot, filePath), {
-                  withFileTypes: true,
-                })
-              ).map(({ name, isDirectory }) => ({ name, isDirectory }));
-            },
+            readDirectory: (filePath, signal) =>
+              readDirectory({ filePath, cwd: sandbox?.containerWorkdir, signal }),
           }
-        : undefined;
+        : options.workspaceOnly && !sandbox
+          ? {
+              readDirectory: async (filePath) => {
+                const root = await fsRoot(options.containmentRoot);
+                return (
+                  await root.list(path.relative(options.containmentRoot, filePath), {
+                    withFileTypes: true,
+                  })
+                ).map(({ name, isDirectory }) => ({ name, isDirectory }));
+              },
+            }
+          : undefined;
     if (!sandbox || readDirectory) {
       const ls = createLsTool(options.codingRoot, {
         operations: listingOperations,
@@ -310,11 +336,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       ? createSandboxedReadTool({
           root: sandboxRoot,
           bridge: sandboxFsBridge!,
+          memoryFileAccess,
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
           modelHasVision: options.modelHasVision,
         })
       : createReadTool(options.codingRoot, {
+          operations: memoryFileAccess,
           maxBytes: resolveAdaptiveReadMaxBytes(options),
           modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
           modelHasVision: options.modelHasVision,
@@ -365,7 +393,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     );
     if (!options.readOnly && !sandboxRoot) {
       for (const createTool of [createHostWorkspaceEditTool, createHostWorkspaceWriteTool]) {
-        const tool = createTool(options.codingRoot, options);
+        const tool = createTool(options.codingRoot, { ...options, memoryFileAccess });
         base.push(guardWorkspaceTool(tool));
       }
     }
@@ -376,6 +404,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       root: sandboxRoot,
       bridge: sandboxFsBridge!,
       memoryWriteProvenance: options.memoryWriteProvenance,
+      memoryFileAccess,
       abortSignal: options.abortSignal,
     };
     for (const createTool of [createSandboxedEditTool, createSandboxedWriteTool]) {
@@ -406,6 +435,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         workspaceOnly: options.applyPatchWorkspaceOnly,
         containmentSource: options.applyPatchContainmentSource,
         memoryWriteProvenance: options.memoryWriteProvenance,
+        memoryFileAccess,
         abortSignal: options.abortSignal,
       }),
     );
@@ -414,11 +444,24 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        ...(sandbox?.isolatedWorkspace
+          ? {
+              preparedStoreEnvironment: {},
+              preparedRunEnvironment: {
+                credentialScrubEnv: {},
+                localIdentityEnv: {},
+                excludedStoreNames: [],
+                managedLocalIdentity: false,
+              },
+            }
+          : {}),
         ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox
           ? {
               containerName: sandbox.containerName,
+              isolatedWorkspace: sandbox.isolatedWorkspace,
+              executionSignal: sandbox.executionSignal,
               workspaceDir: sandbox.workspaceDir,
               containerWorkdir: sandbox.containerWorkdir,
               workdirValidation: sandbox.backend?.workdirValidation,
@@ -442,5 +485,20 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
 
   base.forEach((tool) => bindAgentToolActionDescriptor(tool, filesystemAction));
   shell.forEach((tool) => bindAgentToolActionDescriptor(tool, processAction));
-  return [...base, ...shell];
+  const tools = [...base, ...shell];
+  if (memoryFileAccess) {
+    for (const tool of tools) {
+      if (tool.name === "exec" || tool.name === "process") {
+        continue;
+      }
+      const execute = tool.execute;
+      tool.execute = async (...args: Parameters<AnyAgentTool["execute"]>) => {
+        memoryFileAccess.assertCurrent();
+        const result = await execute(...args);
+        memoryFileAccess.assertCurrent();
+        return result;
+      };
+    }
+  }
+  return tools;
 }

@@ -109,7 +109,10 @@ describe("memory manager FTS-only reindex", () => {
     providerQueryCalls = 0;
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "MEMORY.md"),
+      "Alpha topic\n\nKeep this note.",
+    );
     setFtsOnlyStateDir(path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
@@ -256,7 +259,9 @@ describe("memory manager FTS-only reindex", () => {
       onDebug: (entry) => debug.push(entry),
     });
 
-    expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+    expect(results).toEqual([
+      expect.objectContaining({ path: "memory/MEMORY.md", source: "memory" }),
+    ]);
     expect(providerQueryCalls).toBe(0);
     expect(debug).toEqual(
       expect.arrayContaining([
@@ -282,7 +287,9 @@ describe("memory manager FTS-only reindex", () => {
     providerQueryError = new Error("query embedding request failed at runtime");
     const results = await memoryManager.search("Alpha topic");
 
-    expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+    expect(results).toEqual([
+      expect.objectContaining({ path: "memory/MEMORY.md", source: "memory" }),
+    ]);
   });
 
   it("keeps explicit providers fail-closed when a runtime query embedding fails", async () => {
@@ -328,7 +335,7 @@ describe("memory manager FTS-only reindex", () => {
 
       await expect(
         memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
-      ).resolves.toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+      ).resolves.toEqual([expect.objectContaining({ path: "memory/MEMORY.md", source: "memory" })]);
       expect(debug).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -410,8 +417,8 @@ describe("memory manager FTS-only reindex", () => {
     await expect(backgroundSync).resolves.toBeUndefined();
     const results = await Promise.all([firstSearch, secondSearch]);
     expect(results).toEqual([
-      [expect.objectContaining({ path: "MEMORY.md", source: "memory" })],
-      [expect.objectContaining({ path: "MEMORY.md", source: "memory" })],
+      [expect.objectContaining({ path: "memory/MEMORY.md", source: "memory" })],
+      [expect.objectContaining({ path: "memory/MEMORY.md", source: "memory" })],
     ]);
     expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
   });
@@ -490,7 +497,7 @@ describe("memory manager FTS-only reindex", () => {
       expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
 
       await fs.writeFile(
-        path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "memory", "MEMORY.md"),
         "Gamma fallback refresh\n\nIndexed while embeddings remain degraded.",
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
@@ -499,7 +506,7 @@ describe("memory manager FTS-only reindex", () => {
 
       nowSpy.mockReturnValue(now + 62_000);
       await fs.writeFile(
-        path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "memory", "MEMORY.md"),
         "Delta fallback refresh\n\nRetry remains keyword-only while embeddings still fail.",
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
@@ -536,7 +543,7 @@ describe("memory manager FTS-only reindex", () => {
       memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
     ).resolves.toEqual([
       expect.objectContaining({
-        path: "MEMORY.md",
+        path: "memory/MEMORY.md",
         source: "memory",
         snippet: expect.stringContaining("Alpha topic"),
       }),
@@ -666,7 +673,7 @@ describe("memory manager FTS-only reindex", () => {
     expect(indexIdentityStatus(liveManager)).toBe("missing");
 
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory", "MEMORY.md"),
       "Beta topic\n\nKeep this repaired note.",
     );
     const cliManager = await createManager({

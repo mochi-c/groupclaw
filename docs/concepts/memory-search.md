@@ -89,6 +89,11 @@ flowchart LR
 
 If only one path is available, the other runs alone.
 
+Conversation-scoped searches narrow memory-file retrieval to the admitted
+Workspace, Channel, Thread, and participant User paths before candidate limits.
+Other conversations cannot fill that candidate budget. Results and partial
+keyword snapshots still undergo visibility checks before reaching the model.
+
 The builtin engine then applies deterministic ranking:
 
 ```text

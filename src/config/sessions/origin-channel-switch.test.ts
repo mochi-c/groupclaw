@@ -51,6 +51,49 @@ const telegramTurn = {
 } satisfies Partial<MsgContext>;
 
 describe("session origin across a channel switch", () => {
+  it("retains a native thread's parent and clears it when the conversation changes", () => {
+    const thread = {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      To: "channel:thread-1",
+      NativeChannelId: "thread-1",
+      MessageThreadId: "thread-1",
+      ThreadParentId: "room-1",
+      AccountId: "family-bot",
+    } satisfies Partial<MsgContext>;
+    const entry = applyOrigin(undefined, thread);
+    expect(entry.origin).toMatchObject({
+      nativeChannelId: "thread-1",
+      nativeParentChannelId: "room-1",
+      threadId: "thread-1",
+    });
+    expect(applyOrigin(entry, { ...thread, ThreadParentId: undefined }).origin).toEqual(
+      entry.origin,
+    );
+    for (const turn of [
+      {
+        ...thread,
+        NativeChannelId: "room-2",
+        MessageThreadId: undefined,
+        ThreadParentId: undefined,
+      },
+      { ...thread, AccountId: "other-bot", ThreadParentId: undefined },
+      {
+        ...thread,
+        NativeChannelId: "thread-2",
+        MessageThreadId: "thread-2",
+        ThreadParentId: undefined,
+      },
+      { ...thread, MessageThreadId: undefined, ThreadParentId: undefined },
+    ]) {
+      const switched = applyOrigin(entry, turn);
+      expect(switched.origin?.nativeParentChannelId).toBeUndefined();
+      expect(switched.origin?.threadId).toBe(turn.MessageThreadId);
+    }
+    expect(applyOrigin(entry, { InternalTurnSource: "heartbeat" }).origin).toEqual(entry.origin);
+  });
+
   it.each([
     { name: "provider", turn: telegramTurn, channel: undefined, thread: undefined },
     {

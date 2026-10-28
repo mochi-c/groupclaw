@@ -140,14 +140,14 @@ describe("memory search bootstrap", () => {
     expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
 
     await fs.writeFile(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
+      path.join(fixture.paths.memory, "MEMORY.md"),
       "alpha sentinel is now searchable.",
     );
     const results = await manager.search("alpha", { minScore: 0 });
 
     expect(primaryFailure).toHaveBeenCalled();
     expect(manager.status()).toMatchObject({ provider: "fallback-provider", dirty: false });
-    expect(results[0]?.path).toBe("MEMORY.md");
+    expect(results[0]?.path).toBe("memory/MEMORY.md");
     expect(results[0]?.snippet).toContain("alpha sentinel");
     expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
   });

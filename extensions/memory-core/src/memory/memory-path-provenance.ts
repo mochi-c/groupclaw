@@ -57,8 +57,9 @@ export async function resolveMemoryPathClassification(params: {
   }
   const segments = relativePath.split("/");
   const curatedRoot =
-    segments.length === 1 &&
-    (segments[0] === "MEMORY.md" || segments[0] === "memory.md" || segments[0] === "USER.md");
+    relativePath === "memory/MEMORY.md" ||
+    (segments.length === 1 &&
+      (segments[0] === "MEMORY.md" || segments[0] === "memory.md" || segments[0] === "USER.md"));
   if (
     (segments.length === 1 && (segments[0] === "DREAMS.md" || segments[0] === "dreams.md")) ||
     (segments[0] === "memory" && (segments[1] === "dreaming" || segments[1] === ".dreams"))

@@ -89,8 +89,8 @@ describe("buildBootstrapContextFiles", () => {
         content: "u".repeat(10_000),
       }),
       makeFile({
-        name: "MEMORY.md",
-        path: "/tmp/MEMORY.md",
+        name: "memory/MEMORY.md",
+        path: "/tmp/memory/MEMORY.md",
         content: "m".repeat(10_000),
       }),
     ];

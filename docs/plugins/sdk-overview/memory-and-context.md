@@ -70,7 +70,7 @@ resolver. Return `null` to skip the flush for provider-specific reasons.
 There are two resolver fields:
 
 - `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Its
-  contract is unchanged from earlier releases. Memory Core uses it.
+  contract is unchanged from earlier releases.
 - `providerFlushPlanResolver` returns a plan the host completes: a
   `MemoryFlushFilePlanDraft` (a complete `MemoryFlushPlan` is one such draft)
   or a `MemoryFlushToolsPlan`. When a plugin registers both, the host uses
@@ -87,10 +87,23 @@ inheriting the active fallback chain.
 
 Choose exactly one persistence arm:
 
-| Arm   | Plan fields                                                                                                      | Flush tools and storage                                                                                                                                                                                        |
-| ----- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| File  | `relativePath: string`                                                                                           | `read` and an append-only `write` restricted to the target file. The host creates the target and requires writable workspace access. Memory Core uses this arm.                                                |
-| Tools | `persistenceToolNames: readonly string[]` (non-empty), optional `lookupToolNames: readonly string[]` (read-only) | `read` plus the declared persistence and lookup tools owned by the selected memory plugin. The host creates no target file and does not require writable workspace access. Lookup tools cannot persist memory. |
+| Arm   | Plan fields                                                                                                      | Flush tools and storage                                                                                                                                                                                                 |
+| ----- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File  | `relativePath: string`                                                                                           | `read` and an append-only `write` restricted to the target file. The host creates the target and requires writable workspace access.                                                                                    |
+| Tools | `persistenceToolNames: readonly string[]` (non-empty), optional `lookupToolNames: readonly string[]` (read-only) | `read` plus the declared persistence and lookup tools owned by the selected memory plugin. The host creates no provider target file and does not require writable workspace access. Lookup tools cannot persist memory. |
+
+Memory Core uses the tools arm with `memory_fragment_append` for scoped candidate
+notes and `memory_context_read` for optional lookup. The host supplies timing and
+the configured flush model. It never targets a Workspace daily file.
+
+The optional `MemoryPluginRuntime.recordEventSource` callback reserves the
+framework Event's exact identity, hash, payload trust, and source-session facts
+before Markdown publication. It uses the already loaded memory runtime.
+Memory Core stores these receipts in its existing Dream SQLite namespace;
+pending operations are excluded until settled bytes match host provenance.
+Its `session_end` consumer captures bounded tails through the host's admitted
+reader and uses `plugin-sdk/memory-host-events.createMemorySessionEndEvent`.
+Events remain Markdown artifacts; Dream processing never deletes them.
 
 Only the selected memory slot owner may supply a tools-arm plan, through
 `providerFlushPlanResolver`. The host tracks which plugin supplied the effective
@@ -129,6 +142,13 @@ completed compaction, so model fallback attempts and later retries within the
 same cycle share an ID; a later cycle or a new session incarnation, including a
 reset that keeps the session ID, gets a different ID. Providers can combine this ID with
 their mutation's identity to deduplicate retries. The ID does not grant authority.
+
+When the session-memory hook is enabled, a settled tools-arm run also emits a
+`memory.pre-compaction-flush` Event under its granted Channel/Thread scope.
+The Event records original session references, run ID, `flushId`, compaction
+count, and the outcome; it does not copy the detached transcript or candidates.
+Source revocation and excluded scopes prevent capture. Event capture failure is
+logged without changing provider persistence or completion.
 
 ### Completion evidence
 
@@ -248,6 +268,16 @@ conversation access.
 OpenClaw resolves memory audience once from trusted turn facts and durable
 session lineage. Providers and plugin tools consume the resulting host-minted
 value:
+
+Native `providerRuntime` owners receive audiences automatically. A file-shaped
+`MemoryPluginRuntime` that uses audience-aware tools opts in with
+`supportsMemoryAudience: true`; Memory Core uses this declaration for scoped
+recall, current-context reads, and Fragment append. The host reuses the already
+loaded slot owner's declaration, including from a standalone lookup, without
+loading plugins again. Runtimes that omit the flag keep their existing behavior
+and take no audience leases. A tools-arm flush for an opted-in runtime delegates
+the source audience as above; file-arm flushes retain their restricted file
+writer and do not expose scoped plugin tools.
 
 ```ts
 type MemoryAudience =

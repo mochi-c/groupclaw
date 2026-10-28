@@ -20,6 +20,14 @@ type SearchImpl = (
   } & MemorySearchDeadlineControlOptions,
 ) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
+export type MemoryFragmentAppendParams = {
+  cfg?: unknown;
+  agentId?: string;
+  relPath: string;
+  content: string;
+  timeLabel: string;
+  title?: string;
+};
 type MemoryManagerDebug = Awaited<ReturnType<typeof getMemorySearchManager>>["debug"];
 type MemoryManagerParams = {
   cfg?: unknown;
@@ -81,11 +89,16 @@ const getMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) =>
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
+const appendAgentMemoryFragmentFileMock = vi.fn(async (params: MemoryFragmentAppendParams) => ({
+  relativePath: params.relPath,
+}));
 
-vi.mock("./tools.runtime.js", () => ({
+vi.mock("./tools.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tools.runtime.js")>()),
   resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
   getMemorySearchManager: getMemorySearchManagerMock,
   readAgentMemoryFile: readAgentMemoryFileMock,
+  appendAgentMemoryFragmentFile: appendAgentMemoryFragmentFileMock,
 }));
 
 export function setMemoryWorkspaceDir(next: string): void {
@@ -134,6 +147,10 @@ export function setMemoryReadFileImpl(
   readFileImpl = next;
 }
 
+export function getAppendAgentMemoryFragmentFileMockParams(): MemoryFragmentAppendParams[] {
+  return appendAgentMemoryFragmentFileMock.mock.calls.map(([params]) => params);
+}
+
 export function resetMemoryToolMockState(overrides?: {
   searchImpl?: SearchImpl;
   readFileImpl?: (params: MemoryReadParams) => Promise<MemoryReadResult>;
@@ -176,4 +193,8 @@ export function getMemorySearchManagerMockParams(): MemoryManagerParams[] {
 
 export function getReadAgentMemoryFileMockCalls(): number {
   return readAgentMemoryFileMock.mock.calls.length;
+}
+
+export function getReadAgentMemoryFileMockParams(): MemoryReadParams[] {
+  return readAgentMemoryFileMock.mock.calls.map(([params]) => params);
 }

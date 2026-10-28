@@ -83,7 +83,7 @@ it("releases delayed hook work and continues dispatch after requester closure an
       parent.run(() =>
         emitSessionAutoResetHook({
           cfg: {},
-          sessionId: "synthetic-session",
+          sessionEntry: { sessionId: "synthetic-session" },
           sessionKey: "agent:main:synthetic",
           reason: "daily",
           agentId: "main",

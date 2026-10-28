@@ -669,6 +669,31 @@ Write colocated tests in `src/channel.test.ts`:
     └── runtime.ts            # Runtime store (if needed)
 ```
 
+## Configured memory audiences
+
+`groups.resolveMemoryPolicy({ cfg, origin })` optionally supplies pure
+channel-owned facts for an admitted conversation. `origin` contains canonical
+native Channel/Thread IDs and transport-verified visibility. Return `undefined`
+when no configured policy applies; observed Session participants then provide
+partial User coverage.
+
+Return `channelMemory: "exclude"` for a launch-only Channel. The host omits its
+Channel memory from context reads and scoped Markdown recall; a turn in that
+Channel receives no Fragment append destination. Its Threads retain their own
+scope and structural parent.
+
+An optional `group` declares `members` as stable Session participant identities
+with optional labels, `key` as an account-scoped sharing-group identity,
+`workspaceShared` as permission for compatible Workspace publication, and
+`consolidationAllowed` as permission for background organization. Labels do not
+merge identities. Sender ACLs do not define members. Private or unverified
+Threads must not inherit a broader parent group.
+
+The host resolves configured members through its existing participant identity
+owner, supplements them with observed Thread contributors, and carries frozen
+facts to memory consumers. Background admission rechecks current policy before
+effects. Keep this callback synchronous and free of network or storage reads.
+
 ## Delegated context reads
 
 Bundled actions can prove equivalence between provider-native delivery aliases and

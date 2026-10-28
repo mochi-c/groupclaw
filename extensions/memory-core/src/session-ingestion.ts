@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
+  listSessionTranscriptCorpusEntriesForAgent,
   loadMemorySessionMetadata,
   matchesSessionEntryPrefixHash,
+  resolveMemorySessionTargetsAsync,
   sessionPathForFile,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
@@ -13,6 +16,7 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
   asNullableRecord,
   normalizeTrimmedStringList,
@@ -21,6 +25,7 @@ import {
   SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION,
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
+import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
@@ -31,6 +36,7 @@ export const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
+const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 type BuildSessionEntryOptions = NonNullable<Parameters<typeof buildSessionEntry>[1]>;
 
 export type SessionEntryOrigin = {
@@ -156,6 +162,7 @@ export function sessionExclusionReason(
   source: SessionIngestionSource,
   policy: SessionAdmissionPolicy | undefined,
   forgottenSessionIds: ReadonlySet<string>,
+  preparedMetadata?: ReturnType<typeof loadMemorySessionMetadata> | null,
 ): string | undefined {
   if (!source.sessionOrigin) {
     return undefined;
@@ -167,10 +174,13 @@ export function sessionExclusionReason(
   if (!policy) {
     return undefined;
   }
-  const metadata = loadMemorySessionMetadata({
-    ...source.sessionOrigin,
-    storePath: source.buildOptions.storePath,
-  });
+  const metadata =
+    preparedMetadata === undefined
+      ? loadMemorySessionMetadata({
+          ...source.sessionOrigin,
+          storePath: source.buildOptions.storePath,
+        })
+      : preparedMetadata;
   if (!metadata) {
     return undefined;
   }
@@ -188,8 +198,84 @@ export function sessionExclusionReason(
     : undefined;
 }
 
-export function sessionIngestionStateKeyFromCorpus(entry: SessionTranscriptCorpusEntry): string {
+function sessionIngestionStateKeyFromCorpus(entry: SessionTranscriptCorpusEntry): string {
   return `${entry.agentId}:${sessionPathFromCorpus(entry)}`;
+}
+
+export async function collectLiveSessionIngestionSources(params: {
+  agentIds: string[];
+  cfg: OpenClawConfig;
+  files: Record<string, SessionIngestionFileState>;
+  admissionPolicy?: SessionAdmissionPolicy;
+}) {
+  // A bounded sweep must retain checkpoints for sources it never reaches.
+  // Only a source that was discovered and then proved absent may be removed.
+  const nextFiles = { ...params.files };
+  const sources: SessionIngestionSource[] = [];
+  for (const agentId of params.agentIds) {
+    const knownStateKeys = new Set<string>();
+    const forgottenSessionIds = new Set(
+      (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
+    );
+    const entries = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
+      includeRetainedSqlite: true,
+    });
+    const metadataBySession = new Map(
+      (
+        await resolveMemorySessionTargetsAsync({
+          agentId,
+          storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
+          sessionIds: entries.map((entry) => entry.sessionId),
+        })
+      ).map((metadata) => [metadata.sessionId, metadata]),
+    );
+    for (const entry of entries) {
+      knownStateKeys.add(sessionIngestionStateKeyFromCorpus(entry));
+      const source = sessionIngestionSourceFromCorpus(entry);
+      if (!source) {
+        continue;
+      }
+      if (
+        // Retained reset/delete archives stay searchable, outside the live Dream corpus.
+        entry.artifactKind !== "active-session" ||
+        SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(entry.sessionFile))
+      ) {
+        continue;
+      }
+      const metadata = metadataBySession.get(entry.sessionId);
+      // Shared turns own scoped Fragments/Events, even before the first notebook exists.
+      const excludedReason =
+        metadata?.chatType === "group" || metadata?.chatType === "channel"
+          ? "scoped-conversation"
+          : sessionExclusionReason(
+              source,
+              params.admissionPolicy,
+              forgottenSessionIds,
+              metadata ?? null,
+            );
+      if (excludedReason) {
+        // Exclude before reading content; an empty fingerprint permits later re-admission.
+        nextFiles[source.stateKey] = {
+          mtimeMs: entry.updatedAtMs ?? 0,
+          size: 0,
+          contentHash: "",
+          lineCount: 0,
+          lastContentLine: 0,
+          excludedReason,
+        };
+        continue;
+      }
+      sources.push(source);
+    }
+    // Corpus enumeration proves which owned checkpoints are stale.
+    // Foreign backfill checkpoints belong to a separate lifecycle.
+    for (const stateKey of Object.keys(nextFiles)) {
+      if (stateKey.startsWith(`${agentId}:`) && !knownStateKeys.has(stateKey)) {
+        delete nextFiles[stateKey];
+      }
+    }
+  }
+  return { sources, nextFiles };
 }
 
 export function foreignSessionIngestionSource(

@@ -111,6 +111,11 @@ export function buildConversationToolPolicyPipelineSteps(params: {
     },
     ...(params.additionalStepsAfterSandbox ?? []),
     {
+      policy: profile.workspaceIsolationPolicy,
+      source: { kind: "session" },
+      label: "isolated project tools",
+    },
+    {
       policy: params.policies.subagentPolicy,
       source: { kind: "session" },
       label: "subagent tools.allow",

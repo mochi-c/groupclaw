@@ -14,6 +14,10 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
+import {
+  filterMemorySearchHitsByConversationScope,
+  resolveConversationScopeMemoryPathFilter,
+} from "./scoped-memory-visibility.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
@@ -50,6 +54,11 @@ type MemorySearchToolQuery = {
   sessionKey?: string;
   activeProjectKeys?: readonly string[];
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  /** Host-minted admitted conversation context; present only for scoped turns. */
+  memoryAudienceContext?: NonNullable<
+    NonNullable<OpenClawPluginToolContext["memoryAudience"]>["context"]
+  >;
+  assertSearchCurrent?: () => void;
 };
 
 type MemorySearchToolVisibility = {
@@ -102,21 +111,28 @@ export async function executeMemorySearchToolQuery(params: {
     searchSources,
     startedAt,
   };
+  const memoryPathFilter = query.memoryAudienceContext
+    ? resolveConversationScopeMemoryPathFilter(query.memoryAudienceContext)
+    : undefined;
 
   const searchOnce = async () => {
+    query.assertSearchCurrent?.();
     params.onRebuildNotice?.(captureMemoryRebuildNotice(active.manager.status()));
     const allowedSources = searchSources ? new Set(searchSources) : undefined;
     const searchesSessions = searchSources?.includes("sessions") === true;
-    const indexedCandidateCount = searchesSessions
+    const requiresPostFilter =
+      searchesSessions ||
+      Boolean(query.memoryAudienceContext && (!searchSources || searchSources.includes("memory")));
+    const indexedCandidateCount = requiresPostFilter
       ? (active.manager.status().sourceCounts ?? [])
-          .filter((entry) => allowedSources?.has(entry.source))
+          .filter((entry) => !allowedSources || allowedSources.has(entry.source))
           .reduce((total, entry) => total + entry.chunks, 0)
       : query.resultLimit;
     // A zero-count index can populate during first-search bootstrap. Reserve the
     // full bounded window so that bootstrap cannot recreate post-filter starvation.
     const availableCandidates =
       indexedCandidateCount > 0 ? indexedCandidateCount : MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES;
-    const searchWindow = searchesSessions
+    const searchWindow = requiresPostFilter
       ? Math.min(MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES, availableCandidates)
       : query.resultLimit;
     const candidates = await active.manager.search(query.text, {
@@ -124,6 +140,7 @@ export async function executeMemorySearchToolQuery(params: {
       minScore: query.minScore,
       sessionKey: query.sessionKey,
       activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
+      memoryPathFilter,
       signal,
       ...(params.deadlineControl
         ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: params.deadlineControl }
@@ -235,6 +252,14 @@ async function finalizeMemorySearchToolQuery(params: {
     hits: searched.candidates,
     conversationRecall: query.conversationRecall,
   });
+  query.assertSearchCurrent?.();
+  // Search admission can include public same-group history; Context stays local.
+  if (query.memoryAudienceContext) {
+    filtered = filterMemorySearchHitsByConversationScope({
+      hits: filtered,
+      context: query.memoryAudienceContext,
+    });
+  }
   if (searchSources) {
     const allowedSources = new Set(searchSources);
     filtered = filtered.filter((hit) => allowedSources.has(hit.source));

@@ -129,4 +129,10 @@ Score it on:
 
 ## Deferred
 
-- deterministic mock compaction triggering is still deferred; the current replay-safety lane is a live-frontier-first executable scenario
+`compaction-retry-mutating-tool` now requires `mock-openai` and deterministically
+forces one OpenClaw provider overflow. Its scenario verifies persisted compaction,
+pruning, and exactly one successful mutation.
+
+The Codex runtime-pair cell explicitly skips before Gateway, session, or provider
+work. Native token-threshold compaction and its mutation-retry proof still need a
+separate scenario; the OpenClaw overflow test does not cover that entry point.

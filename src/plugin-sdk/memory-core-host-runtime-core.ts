@@ -40,6 +40,7 @@ export type {
   MemoryProviderFlushPlanResolver,
 } from "../plugins/memory-state.js";
 export {
+  clearMemoryArtifactProvenance,
   listMemoryArtifactProvenance,
   readMemoryArtifactProvenance,
 } from "../memory/memory-artifact-provenance.js";

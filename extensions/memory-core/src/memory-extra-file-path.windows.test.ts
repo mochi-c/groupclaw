@@ -62,7 +62,7 @@ describe.skipIf(process.platform !== "win32")("Windows explicit memory extra-fil
       }),
     ).resolves.toEqual({ curatedRoot: false, originClass: "untrusted" });
 
-    const canonicalRoot = path.join(workspaceDir, "MEMORY.md");
+    const canonicalRoot = path.join(workspaceDir, "memory", "MEMORY.md");
     const uppercaseBuiltIn = path.join(workspaceDir, "memory", "BUILTIN.MD");
     await fs.writeFile(canonicalRoot, "canonical", "utf8");
     await fs.writeFile(uppercaseBuiltIn, "excluded built-in alias", "utf8");

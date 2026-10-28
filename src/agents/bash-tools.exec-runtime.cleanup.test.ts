@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import {
@@ -57,6 +57,100 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
     ...params,
   });
 }
+
+it("rejects isolated execution revoked during preparation before native spawn", async () => {
+  const source = new AbortController();
+  const reason = new Error("conversation membership revoked during preparation");
+  const terminate = vi.fn(async () => {});
+  supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+    ...runtimeManagedRun(input),
+    wait: async () => createRunExit(),
+  }));
+  const preparation = runTestExecProcess({
+    sandbox: {
+      isolatedWorkspace: true,
+      executionSignal: source.signal,
+      containerName: "isolated-fixture",
+      workspaceDir: "/workspace",
+      containerWorkdir: "/workspace",
+      prepareProcessCleanup: (env) => ({ env, terminate, interrupt: async () => false }),
+      buildExecSpec: async () => {
+        source.abort(reason);
+        return { argv: ["isolated-fixture"], env: {}, stdinMode: "pipe-closed" };
+      },
+    },
+  });
+  try {
+    await expect(preparation).rejects.toBe(reason);
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+    expect(terminate).toHaveBeenCalledOnce();
+  } finally {
+    await preparation.then((run) => run.promise).catch(() => {});
+  }
+});
+
+it.each(["exit", "revocation"] as const)(
+  "settles isolated project processes and joins descendants after %s",
+  async (boundary) => {
+    const exit = createDeferred<RunExit>();
+    const termination = createDeferred();
+    const terminating = createDeferred();
+    const source = new AbortController();
+    const terminate = vi.fn(async () => {
+      terminating.resolve();
+      await termination.promise;
+    });
+    const cancel = vi.fn(() => {
+      exit.resolve(createRunExit({ reason: "manual-cancel", exitCode: null }));
+    });
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      ...runtimeManagedRun(input),
+      cancel,
+      wait: () => exit.promise,
+    }));
+    const run = await runTestExecProcess({
+      sandbox: {
+        isolatedWorkspace: true,
+        executionSignal: source.signal,
+        containerName: "isolated-fixture",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+        prepareProcessCleanup: (env) => ({ env, terminate, interrupt: async () => false }),
+        buildExecSpec: async () => ({
+          argv: ["isolated-fixture"],
+          env: {},
+          stdinMode: "pipe-closed",
+        }),
+      },
+    });
+    markBackgrounded(run.session);
+    try {
+      if (boundary === "exit") {
+        exit.resolve(createRunExit());
+      } else {
+        source.abort(new Error("conversation membership revoked"));
+        expect(cancel).toHaveBeenCalledOnce();
+      }
+      await awaitGateBeforeSettlement(
+        terminating.promise,
+        run.promise,
+        "Isolated execution settled without descendant cleanup",
+      );
+      expect(cancel).toHaveBeenCalledTimes(boundary === "revocation" ? 1 : 0);
+      expect(terminate).toHaveBeenCalledOnce();
+      expect(run.session.exited).toBe(false);
+      termination.resolve();
+      await expect(run.promise).resolves.toMatchObject({
+        status: boundary === "exit" ? "completed" : "failed",
+      });
+      expect(run.session.exited).toBe(true);
+    } finally {
+      exit.resolve(createRunExit());
+      termination.resolve();
+      await run.promise;
+    }
+  },
+);
 
 it.each([
   { reason: "manual-cancel" as const, cleanupFails: false, duringFinalize: false },

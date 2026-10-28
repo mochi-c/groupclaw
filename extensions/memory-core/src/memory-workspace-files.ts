@@ -1,5 +1,6 @@
 import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   getAgentWorkspaceAccess,
   WorkspaceAccessUnavailableError,
@@ -10,6 +11,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 type MemoryWorkspaceMaintenance = NonNullable<MemoryWorkspaceFiles["maintenance"]>;
+
+export function resolveWorkspaceMemoryPath(workspaceDir: string): string {
+  return path.join(workspaceDir, "memory", "MEMORY.md");
+}
 
 export function getMemoryWorkspaceMaintenance(
   workspaceDir: string,

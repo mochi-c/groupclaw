@@ -11,6 +11,7 @@ export type ResolvedRemotePath = SandboxResolvedPath & {
 
 /** Minimal remote shell contract used by the SSH filesystem bridge. */
 export type RemoteShellSandboxHandle = {
+  supportsCommandAuthority?: true;
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
   runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;

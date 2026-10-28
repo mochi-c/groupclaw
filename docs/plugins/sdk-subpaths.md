@@ -594,7 +594,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
     | `plugin-sdk/memory-core-host-engine-fs` | Private-local focused filesystem and user-path helpers for doctor migrations |
     | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts and batch/remote helpers. Providers register through the generic embedding provider API. |
-    | `plugin-sdk/memory-core-host-engine-sessions` | Private-local after July 2026; Memory session transcript and query helpers. Runtime archive inventory uses `loadArchivedSessionsAsync`, `resolveMemorySessionTargetsAsync`; `loadArchivedSessions` retains its synchronous contract. |
+    | `plugin-sdk/memory-core-host-engine-sessions` | Private-local after July 2026; Memory session transcript and query helpers. `withMemoryDreamSource` admits a background source through current session-generation authority for the callback lifetime; callers recheck its closure before effects. `resolveMemoryArtifactRelativePath` and `resolveCanonicalMemoryUserId` retain host-owned scope encoding. Runtime archive inventory uses `loadArchivedSessionsAsync`, `resolveMemorySessionTargetsAsync`; `loadArchivedSessions` retains its synchronous contract. |
     | `plugin-sdk/memory-core-host-engine-schema` | Private-local memory index schema and sqlite-vec operations shared by Doctor, host maintenance, and native publication workers |
     | `plugin-sdk/memory-core-host-engine-indexing` | Private-local immutable chunk preparation, annotations, hashes, and embedding input limits for indexing workers |
     | `plugin-sdk/memory-core-host-engine-knn` | Private-local read-only SQLite ownership checks, sqlite-vec, and text/vector primitives for isolated retrieval workers and children |
@@ -605,7 +605,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-runtime-core` | Private-local after July 2026; Memory host core runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-files` | Private-local after July 2026; Memory host file/runtime helpers |
     | `plugin-sdk/memory-host-core` | Deprecated compatibility facade for vendor-neutral memory host helpers. New memory plugins use injected memory capabilities and host-prepared prompts; companion plugins still use the retained facade for public-artifact discovery until a focused read seam exists. |
-    | `plugin-sdk/memory-host-events` | Private-local after July 2026; Vendor-neutral alias for memory host event journal helpers |
+    | `plugin-sdk/memory-host-events` | Private-local after July 2026; Memory host event journal helpers and `createMemorySessionEndEvent`, which captures a bounded ended-session tail through the canonical Event and provenance owners. Requires the caller's live assertion and source-session facts. |
     | `plugin-sdk/memory-host-markdown` | Private-local after July 2026; Shared managed-markdown helpers for memory-adjacent plugins |
     | `plugin-sdk/memory-host-search` | Private-local after July 2026; Bundled active-memory facade for search managers, provider-neutral leases, and their local types |
   </Accordion>

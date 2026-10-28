@@ -228,7 +228,7 @@ function readCuratedCandidateBatch(params: {
       "provenance.supersedes_key as supersedes_key",
     ])
     .where("chunk.source", "=", "memory")
-    .where("chunk.path", "in", ["MEMORY.md", "USER.md"])
+    .where("chunk.path", "in", ["memory/MEMORY.md", "USER.md"])
     .where("provenance.origin_class", "in", ["owner", "agent"]);
   if (params.requireProject) {
     query = query.where("metadata.project_key", "is not", null);

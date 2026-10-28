@@ -10,6 +10,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import type * as ConfigSessionTypes from "../config/sessions/types.js";
+import {
+  registerInternalHook,
+  unregisterInternalHook,
+  type InternalHookEvent,
+} from "../hooks/internal-hooks.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   cleanupSessionLifecycleArtifacts,
@@ -449,29 +454,64 @@ describe("session-store-runtime", () => {
   it("guards entry deletion against a concurrent session update", async () => {
     const sessionKey = "agent:main:delete-guarded";
     const updatedAt = Date.now();
-    await seedSessionEntry(sessionKey, { sessionId: "session-delete-guarded", updatedAt });
+    await replaceInternalSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "session-delete-guarded",
+        updatedAt,
+        mainRestartRecovery: { chargedAttempts: 1, cycleId: "private-cycle", revision: 1 },
+      },
+    );
 
-    await expect(
-      deleteSessionEntry({
-        expectedSessionId: "older-session",
-        expectedUpdatedAt: updatedAt - 1,
-        sessionKey,
-        storePath,
-      }),
-    ).resolves.toBe(false);
-    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId: "session-delete-guarded",
-      updatedAt,
-    });
+    const events: InternalHookEvent[] = [];
+    const listener = (event: InternalHookEvent) => {
+      events.push(event);
+    };
+    const lifecycle = { cfg: {}, reason: "thread-closed" as const };
+    registerInternalHook("session:closed", listener);
+    try {
+      await expect(
+        deleteSessionEntry({
+          expectedSessionId: "older-session",
+          expectedUpdatedAt: updatedAt - 1,
+          sessionKey,
+          storePath,
+          lifecycle,
+        }),
+      ).resolves.toBe(false);
+      expect(events).toEqual([]);
+      expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+        sessionId: "session-delete-guarded",
+        updatedAt,
+      });
 
-    await expect(
-      deleteSessionEntry({
-        expectedSessionId: "session-delete-guarded",
-        expectedUpdatedAt: updatedAt,
+      await expect(
+        deleteSessionEntry({
+          expectedSessionId: "session-delete-guarded",
+          expectedUpdatedAt: updatedAt,
+          sessionKey,
+          storePath,
+          lifecycle,
+        }),
+      ).resolves.toBe(true);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: "session",
+        action: "closed",
         sessionKey,
-        storePath,
-      }),
-    ).resolves.toBe(true);
+        context: {
+          agentId: "main",
+          storePath,
+          reason: "thread-closed",
+          sessionEntry: { sessionId: "session-delete-guarded", updatedAt },
+        },
+      });
+      expect(events[0]?.context.sessionEntry).not.toHaveProperty("mainRestartRecovery");
+      await expect(deleteSessionEntry({ sessionKey, storePath, lifecycle })).resolves.toBe(false);
+      expect(events).toHaveLength(1);
+    } finally {
+      unregisterInternalHook("session:closed", listener);
+    }
   });
 
   it("guards entry deletion when the earlier snapshot had no session id", async () => {

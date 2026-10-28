@@ -392,8 +392,14 @@ async function prepareSessionGenerationLease(
 }
 
 /** Session lifecycle owners compose these facts with their own admitted mutation authority. */
-export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(input);
+export async function prepareSessionGenerationFacts(
+  input: SessionGenerationFacts,
+  onRevoked?: (reason: unknown) => void,
+) {
+  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(
+    input,
+    onRevoked,
+  );
   return { assertCurrent, prepareRead, release };
 }
 

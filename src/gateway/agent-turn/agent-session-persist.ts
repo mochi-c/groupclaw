@@ -137,6 +137,7 @@ export async function persistAgentSessionPhase(params: {
   let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let skipAgentInitialSessionTouch = false;
   let createdNewEntry = false;
+  let departingSessionEntry: SessionEntry | undefined;
   const abortForLifecycleRotation = () =>
     params.abortForLifecycleRotation({
       sessionKey: params.canonicalSessionKey,
@@ -339,6 +340,9 @@ export async function persistAgentSessionPhase(params: {
               previousSessionId && nextSessionId && previousSessionId !== nextSessionId
                 ? { previousSessionId }
                 : {};
+            if (rotationLineage.previousSessionId) {
+              departingSessionEntry = freshEntry;
+            }
             const operatorRoleActor = params.operatorRoleActor;
             // Host-owned synthetic runs retain their verified operator only in the
             // private role actor; recover it solely for a newly required sandbox.
@@ -509,6 +513,7 @@ export async function persistAgentSessionPhase(params: {
         cfg: params.cfg,
         sessionKey: params.canonicalSessionKey,
         sessionId: previousSessionId,
+        sessionEntry: departingSessionEntry ?? params.entry,
         storePath: params.storePath,
         sessionFile: undefined,
         agentId: params.sessionAgentId,

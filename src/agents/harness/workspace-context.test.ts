@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryCapability } from "../../plugins/memory-state.js";
 import * as bootstrapRuntime from "../bootstrap-files.js";
+import { DEFAULT_MEMORY_FILENAME } from "../workspace.js";
 import { prepareAgentWorkspaceContext } from "./workspace-context.js";
 
 afterEach(() => {
@@ -17,7 +18,7 @@ describe("agent workspace context preparation", () => {
     vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
       bootstrapFile("SOUL.md", "Persona context.\n".repeat(100)),
       bootstrapFile("AGENTS.md", rules),
-      bootstrapFile("MEMORY.md", "Durable memory.\n".repeat(100)),
+      bootstrapFile(DEFAULT_MEMORY_FILENAME, "Durable memory.\n".repeat(100)),
     ]);
     const context = await prepareAgentWorkspaceContext({
       workspaceDir,
@@ -114,16 +115,33 @@ describe("agent workspace context preparation", () => {
     }
   });
 
-  it("routes only root memory before budgeting and retains nested memory as project context", async () => {
-    const rootMemory = bootstrapFile("MEMORY.md", "Large durable memory.\n".repeat(100));
+  it("routes curated scoped memory before budgeting and retains nested project memory", async () => {
+    const rootMemory = bootstrapFile(
+      DEFAULT_MEMORY_FILENAME,
+      "Large durable memory.\n".repeat(100),
+    );
     const nestedMemory = bootstrapFile(
-      "MEMORY.md",
+      DEFAULT_MEMORY_FILENAME,
       "Package-local memory remains project context.",
       path.join(workspaceDir, "packages", "pkg", "MEMORY.md"),
+    );
+    const threadMemory = bootstrapFile(
+      DEFAULT_MEMORY_FILENAME,
+      "Current thread summary.",
+      path.join(
+        workspaceDir,
+        "memory",
+        "Channel",
+        `id-${"a".repeat(64)}`,
+        "Thread",
+        `id-${"b".repeat(64)}`,
+        "MEMORY.md",
+      ),
     );
     const instructions = bootstrapFile("AGENTS.md", "Keep the bounded operating rules.");
     vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue([
       rootMemory,
+      threadMemory,
       nestedMemory,
       instructions,
     ]);
@@ -133,8 +151,11 @@ describe("agent workspace context preparation", () => {
       memoryToolRouted: true,
       config: { agents: { defaults: { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 300 } } },
     });
-    expect(context.memoryReferenceFiles).toEqual([contextFile(rootMemory)]);
-    expect(context.memoryToolRoutedBootstrapFiles).toEqual([rootMemory]);
+    expect(context.memoryReferenceFiles).toEqual([
+      contextFile(threadMemory),
+      contextFile(rootMemory),
+    ]);
+    expect(context.memoryToolRoutedBootstrapFiles).toEqual([threadMemory, rootMemory]);
     expect(context.promptContextFiles).toEqual([contextFile(nestedMemory)]);
     expect(context.instructionSnapshot.files).toEqual([contextFile(instructions)]);
     expect(context.instructionSnapshot.instructions).toContain("Keep the bounded operating rules.");

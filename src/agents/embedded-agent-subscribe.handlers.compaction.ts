@@ -1,3 +1,4 @@
+import { emitSessionCompactedHook } from "../hooks/session-compaction.js";
 /**
  * Handles embedded-agent compaction lifecycle events. The handlers pause
  * liveness, emit agent events, run hooks, reconcile persisted counts, and
@@ -232,6 +233,30 @@ export function handleCompactionEnd(
   // post-compaction session state plugin authors observe.
   if (completed && !willRetry) {
     runBestEffortCompactionHook(ctx, "after");
+  }
+  if (
+    completed &&
+    ctx.params.sessionPersistence !== "detached" &&
+    !ctx.state.unsubscribed &&
+    !ctx.params.isTerminalAborted?.()
+  ) {
+    const capture = emitSessionCompactedHook({
+      cfg: ctx.params.config,
+      agentId: ctx.params.agentId,
+      sessionKey: ctx.params.sessionKey,
+      sessionId: ctx.params.sessionId,
+      messages: ctx.params.session.messages,
+      messageCount: ctx.params.session.messages.length,
+      compactedCount: ctx.getCompactionCount(),
+      tokensBefore: outcome.tokensBefore,
+      tokensAfter: outcome.tokensAfter,
+      assertCurrent: () => {
+        if (ctx.state.unsubscribed || ctx.params.isTerminalAborted?.()) {
+          throw new Error("Compaction subscription is no longer active");
+        }
+      },
+    });
+    return Promise.all([recording, capture]).then(() => {});
   }
   return recording;
 }

@@ -23,6 +23,15 @@ under “Proposed contract” describes the complete design; the implemented sub
 
 ## Implementation status
 
+Generation collection now runs under the immutable installation executor after
+successful updates, with a separate `update cleanup-generations --root` command
+and read-only preview. New preparations seal a build ownership artifact in private
+Git metadata, binding installation, filesystem identities, SHA, and build digest.
+Collection retains current, previous, prepared, live-process and pending recovery
+references. Older or unknown material is never retroactively adopted. Interrupted
+large-tree deletion resumes from its retained artifact; migration recovery
+originals remain with their existing cleanup owner.
+
 The first review slice (#163799) implemented **Detect and
 adopt an immutable installation** and **Prepare everything possible while the
 previous Gateway serves**. The maintainer accepted the durable descriptor

@@ -172,7 +172,7 @@ describe("memory forget source removal", () => {
       };
       const survivor = { ...selected, entryKey: "survivor-entry", sessionId: "survivor" };
       await recordMemoryEntryOrigins({ agentId: "main", origins: [selected, survivor] });
-      const memoryPath = path.join(fixture.workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(fixture.workspaceDir, "memory", "MEMORY.md");
       const retained =
         "<!-- openclaw-memory-promotion:survivor-entry -->\n- Retained amber detail.\n";
       await fs.writeFile(
@@ -262,7 +262,7 @@ describe("memory forget source removal", () => {
       observedAt: 1,
     };
     await recordMemoryEntryOrigins({ agentId: "main", origins: [origin] });
-    const memoryPath = path.join(fixture.workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(fixture.workspaceDir, "memory", "MEMORY.md");
     const content =
       "<!-- openclaw-memory-promotion:selected-entry -->\n- Selected violet detail.\n";
     await fs.writeFile(memoryPath, content);

@@ -199,6 +199,15 @@ function ensureMemoryRuntime(params: {
           ? { searchRuntimeRegistered: false }
           : undefined;
   const previousSlot = standaloneMemoryRegistrySlot;
+  setStandaloneMemoryOwner(
+    registration && (runtime || registeredProviderRuntime)
+      ? {
+          pluginId: registration.pluginId,
+          native: registeredProviderRuntime !== undefined,
+          supportsMemoryAudience: runtime?.supportsMemoryAudience,
+        }
+      : undefined,
+  );
   if (
     previousSlot?.runtime === runtime &&
     previousSlot?.providerRuntime === registeredProviderRuntime
@@ -217,11 +226,6 @@ function ensureMemoryRuntime(params: {
     providerRuntime: registeredProviderRuntime,
     retiredRuntimes,
   };
-  setStandaloneMemoryOwner(
-    registration && (runtime || registeredProviderRuntime)
-      ? { pluginId: registration.pluginId, native: registeredProviderRuntime !== undefined }
-      : undefined,
-  );
   for (const ownedRuntime of [owner?.runtime, owner?.providerRuntime]) {
     if (ownedRuntime && !enrolledStandaloneMemoryRuntimes.has(ownedRuntime)) {
       const lifecycle = getPluginValueInstance(ownedRuntime)?.lifecycle;

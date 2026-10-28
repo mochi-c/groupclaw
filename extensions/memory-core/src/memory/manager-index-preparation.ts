@@ -54,7 +54,7 @@ export function prepareMemoryIndexChunks({
   const normalizedEntryPath = entry.path.replaceAll("\\", "/");
   const perEntry =
     source === "memory" &&
-    (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
+    (normalizedEntryPath === "memory/MEMORY.md" || normalizedEntryPath === "USER.md");
   const indexingContent = source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];

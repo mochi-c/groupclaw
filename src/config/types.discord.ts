@@ -30,6 +30,10 @@ export type DiscordDmConfig = {
 };
 
 export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
+  /** Fixed shared-memory group, using stable Discord user IDs, never sender allowlists. */
+  members?: string[];
+  /** Channel memory participation policy. "always" makes the parent a launch entry only. */
+  threadMode?: "never" | "auto" | "always";
   /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
   requireMentionInBotThreads?: boolean;
   /**

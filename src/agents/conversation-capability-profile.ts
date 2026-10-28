@@ -14,6 +14,7 @@ import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
+import { ISOLATED_WORKSPACE_TOOL_ALLOW } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   resolveScheduledToolCallerContext,
@@ -83,6 +84,7 @@ export type ConversationCapabilityProfileParams = {
   cwd?: string;
   spawnWorkspaceDir?: string;
   sandboxToolPolicy?: SandboxToolPolicy;
+  isolatedWorkspace?: boolean;
   runtimeToolAllowlist?: string[];
   /** Persist the runtime allowlist as real parent authority on spawned children. */
   inheritRuntimeToolAllowlist?: boolean;
@@ -140,6 +142,9 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const workspaceIsolationPolicy = params.isolatedWorkspace
+    ? { allow: [...ISOLATED_WORKSPACE_TOOL_ALLOW] }
+    : undefined;
   const profilePolicy = mergeAlsoAllowPolicy(
     resolveToolProfilePolicy(effective.profile),
     resolveManifestToolProfileNames(params.pluginMetadataSnapshot, effective.profile),
@@ -157,6 +162,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
     senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
+    workspaceIsolationPolicy,
   ];
   const runtimeToolPolicy = params.runtimeToolAllowlist
     ? { allow: params.runtimeToolAllowlist }
@@ -229,6 +235,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       groupPolicy,
       senderPolicy,
       sandboxPolicy: sandboxToolPolicy,
+      workspaceIsolationPolicy,
       sandboxSessionRenameOnly,
       subagentPolicy,
       inheritedToolPolicy,

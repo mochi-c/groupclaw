@@ -50,7 +50,7 @@ it.each([
   },
 ])("applies the memory excerpt budget with $name", async ({ contextLimits, maxChars }) => {
   const content = "cedar memory ".repeat(600);
-  const { workspaceDir } = await fixture({ "workspace/MEMORY.md": content });
+  const { workspaceDir } = await fixture({ "workspace/memory/MEMORY.md": content });
   const result = await readAgentMemoryFile({
     cfg: {
       agents: {
@@ -59,7 +59,7 @@ it.each([
       },
     },
     agentId: "main",
-    relPath: "MEMORY.md",
+    relPath: "memory/MEMORY.md",
   });
   expect(result).toMatchObject({ status: "ok", truncated: true, from: 1, lines: 1 });
   expect(result.text.split("\n\n")[0]).toBe(content.slice(0, maxChars));
@@ -88,6 +88,32 @@ it("follows contained workspace parent aliases while keeping extra directories s
     }),
   ).rejects.toMatchObject({ code: "MEMORY_PATH_NOT_ALLOWED" });
 });
+
+it.each(["parent symlink", "hardlink"])(
+  "rejects a scoped read whose allowed path aliases a private source via %s",
+  async (alias) => {
+    const { workspaceDir } = await fixture({
+      "workspace/memory/Channel/private/MEMORY.md": "private discussion",
+    });
+    const privateDirectory = path.join(workspaceDir, "memory/Channel/private");
+    const publicDirectory = path.join(workspaceDir, "memory/Channel/public");
+    const relPath = "memory/Channel/public/MEMORY.md";
+    if (alias === "parent symlink") {
+      await fs.symlink(privateDirectory, publicDirectory, "junction");
+    } else {
+      await fs.mkdir(publicDirectory);
+      await fs.link(path.join(privateDirectory, "MEMORY.md"), path.join(workspaceDir, relPath));
+    }
+    await expect(
+      readAgentMemoryFile({
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
+        agentId: "main",
+        relPath,
+        rejectAliases: true,
+      }),
+    ).rejects.toMatchObject({ code: alias === "parent symlink" ? "symlink" : "hardlink" });
+  },
+);
 
 it.each(["EAGAIN", "EIO"])("preserves read-time %s handling for workspace memory", async (code) => {
   const { workspaceDir } = await fixture({ "workspace/memory/note.md": "memory contents" });

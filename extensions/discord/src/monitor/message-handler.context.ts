@@ -26,7 +26,11 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
+import {
+  resolveDiscordConversationIdentity,
+  resolveDiscordConversationLink,
+} from "../conversation-identity.js";
+import { resolveDiscordChannelConfigByNativeId } from "../group-policy.js";
 import { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
@@ -130,7 +134,15 @@ export async function buildDiscordMessageProcessContext(params: {
   const forumParentSlug =
     isForumParent && threadParentName ? normalizeDiscordSlug(threadParentName) : "";
   const threadChannelId = threadChannel?.id;
-  const threadParentInheritanceEnabled = discordConfig?.thread?.inheritParent ?? false;
+  const launchChannel =
+    isGuildMessage &&
+    resolveDiscordChannelConfigByNativeId({
+      cfg,
+      accountId,
+      channelId: threadParentId ?? messageChannelId,
+    })?.threadMode === "always";
+  const threadParentInheritanceEnabled =
+    !launchChannel && (discordConfig?.thread?.inheritParent ?? false);
   const isForumStarter =
     Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
@@ -449,15 +461,11 @@ export async function buildDiscordMessageProcessContext(params: {
   const conversationGuildId = isGuildMessage
     ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id)
     : "@me";
-  const conversationLink =
-    /^\d+$/.test(conversationChannelId) &&
-    conversationGuildId &&
-    (conversationGuildId === "@me" || /^\d+$/.test(conversationGuildId))
-      ? {
-          url: `https://discord.com/channels/${conversationGuildId}/${conversationChannelId}`,
-          label: conversationThreadId ? "Discord Thread" : "Discord Conversation",
-        }
-      : undefined;
+  const conversationLink = resolveDiscordConversationLink({
+    channelId: conversationChannelId,
+    guildId: conversationGuildId,
+    isThread: Boolean(conversationThreadId),
+  });
 
   const batchMessageIds =
     ctx.sourceMessageIds && ctx.sourceMessageIds.length > 1 ? [...ctx.sourceMessageIds] : undefined;
@@ -584,6 +592,16 @@ export async function buildDiscordMessageProcessContext(params: {
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
     extra: {
+      NativeThreadVisibility: conversationThreadId
+        ? autoThreadContext?.createdThreadId
+          ? "public"
+          : ctx.channelInfo?.type === ChannelType.PrivateThread
+            ? "private"
+            : ctx.channelInfo?.type === ChannelType.PublicThread ||
+                ctx.channelInfo?.type === ChannelType.AnnouncementThread
+              ? "public"
+              : undefined
+        : undefined,
       MessageSids: batchMessageIds,
       MessageSidFirst: batchMessageIds?.[0],
       MessageSidLast: batchMessageIds?.at(-1),

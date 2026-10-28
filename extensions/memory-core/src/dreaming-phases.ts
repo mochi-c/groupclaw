@@ -3,7 +3,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -39,7 +38,6 @@ import {
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
 import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
-import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import {
   inspectWorkspaceFile,
   listWorkspaceDirectory,
@@ -49,12 +47,10 @@ import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   appendSessionCorpusLines,
+  collectLiveSessionIngestionSources,
   mergeTrackedMessageHashes,
   resolveAdmissionPolicy,
   scanSessionIngestionSource,
-  sessionExclusionReason,
-  sessionIngestionSourceFromCorpus,
-  sessionIngestionStateKeyFromCorpus,
   SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
   SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
@@ -62,7 +58,6 @@ import {
   type SessionAdmissionPolicy,
   type SessionEntryOrigin,
   type SessionIngestionMessage,
-  type SessionIngestionSource,
 } from "./session-ingestion.js";
 import { compareStoreTimestampDesc, isGenericDailyHeading } from "./short-term-promotion-utils.js";
 import {
@@ -94,7 +89,6 @@ const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
-const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 const LIGHT_DIARY_HISTORY_LIMIT = 4;
 const LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD = 0.35;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -475,10 +469,6 @@ function resolveWorkspaceMemoryRelativePath(workspaceDir: string, filePath: stri
   return `memory/${path.basename(filePath)}`;
 }
 
-function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
-  return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
-}
-
 function resolveSessionAgentsForWorkspace(params: {
   cfg: OpenClawConfig;
   workspaceDir: string;
@@ -518,60 +508,13 @@ async function collectSessionIngestionBatches(params: {
   });
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
-  // A bounded sweep must retain checkpoints for sources it never reaches.
-  // Only a source that was discovered and then proved absent may be removed.
-  const nextFiles = { ...params.state.files };
+  const { sources, nextFiles } = await collectLiveSessionIngestionSources({
+    agentIds,
+    cfg: params.cfg,
+    files: params.state.files,
+    admissionPolicy: params.admissionPolicy,
+  });
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
-  const sources: SessionIngestionSource[] = [];
-  for (const agentId of agentIds) {
-    const knownStateKeys = new Set<string>();
-    const forgottenSessionIds = new Set(
-      (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
-    );
-    for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
-      includeRetainedSqlite: true,
-    })) {
-      knownStateKeys.add(sessionIngestionStateKeyFromCorpus(entry));
-      const source = sessionIngestionSourceFromCorpus(entry);
-      if (!source) {
-        continue;
-      }
-      if (
-        // Dreaming learns only from the live corpus. Retained reset/delete
-        // archives stay in the shared corpus for memory_search.
-        entry.artifactKind !== "active-session" ||
-        isCheckpointSessionTranscriptPath(entry.sessionFile)
-      ) {
-        continue;
-      }
-      const excludedReason = sessionExclusionReason(
-        source,
-        params.admissionPolicy,
-        forgottenSessionIds,
-      );
-      if (excludedReason) {
-        // Record exclusion before reading transcript content; the empty
-        // fingerprint makes removing the policy re-admit this session.
-        nextFiles[source.stateKey] = {
-          mtimeMs: entry.updatedAtMs ?? 0,
-          size: 0,
-          contentHash: "",
-          lineCount: 0,
-          lastContentLine: 0,
-          excludedReason,
-        };
-        continue;
-      }
-      sources.push(source);
-    }
-    // Complete corpus enumeration proves which owned checkpoints are stale;
-    // foreign backfill checkpoints belong to a separate lifecycle.
-    for (const stateKey of Object.keys(nextFiles)) {
-      if (stateKey.startsWith(`${agentId}:`) && !knownStateKeys.has(stateKey)) {
-        delete nextFiles[stateKey];
-      }
-    }
-  }
   const sortedSources = sources.toSorted((a, b) => {
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
@@ -1146,9 +1089,12 @@ function buildRemReflections(
       return { tag, strength, stat };
     })
     .filter((entry) => entry.strength >= minPatternStrength)
+    // Theme order enters model context; never inherit the host's locale.
     .toSorted(
       (a, b) =>
-        b.strength - a.strength || b.stat.count - a.stat.count || a.tag.localeCompare(b.tag),
+        b.strength - a.strength ||
+        b.stat.count - a.stat.count ||
+        (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0),
     )
     .slice(0, limit);
 

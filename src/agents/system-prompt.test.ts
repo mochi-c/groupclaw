@@ -625,7 +625,7 @@ describe("buildAgentSystemPrompt", () => {
       contextFiles: [
         { path: undefined as unknown as string, content: "Missing path" },
         { path: "   ", content: "Blank path" },
-        { path: "MEMORY.md", content: "Durable facts" },
+        { path: "memory/MEMORY.md", content: "Durable facts" },
         { path: "dir\\SOUL.md", content: "Windows persona" },
         { path: "./SOUL.md", content: "Persona" },
         { path: "AGENTS.md", content: "Alpha" },
@@ -634,12 +634,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("# Project Context");
     expect(prompt).toContain("## AGENTS.md\nAlpha");
     expect(prompt).toContain("SOUL.md: persona/tone.");
-    expect(prompt).toContain("MEMORY.md: durable");
+    expect(prompt).toContain("memory/MEMORY.md: Workspace-global durable");
     expect(prompt).toContain("Durable facts");
     expect(prompt).not.toContain("Missing path");
     expect(prompt).not.toContain("Blank path");
     expect(prompt.indexOf("## AGENTS.md")).toBeLessThan(prompt.indexOf("## ./SOUL.md"));
-    expect(prompt.indexOf("## ./SOUL.md")).toBeLessThan(prompt.indexOf("## MEMORY.md"));
+    expect(prompt.indexOf("## ./SOUL.md")).toBeLessThan(prompt.indexOf("## memory/MEMORY.md"));
   });
 
   it("keeps model-visible channel ids stable across external registration order", () => {

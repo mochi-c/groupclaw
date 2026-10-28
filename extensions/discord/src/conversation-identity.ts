@@ -4,6 +4,22 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordTarget } from "./target-parsing.js";
 
+export function resolveDiscordConversationLink(params: {
+  channelId: string;
+  guildId: string | null | undefined;
+  isThread: boolean;
+}) {
+  const channelId = params.channelId.trim();
+  const guildId = params.guildId?.trim();
+  if (!/^\d+$/u.test(channelId) || !guildId || (guildId !== "@me" && !/^\d+$/u.test(guildId))) {
+    return undefined;
+  }
+  return {
+    url: `https://discord.com/channels/${guildId}/${channelId}`,
+    label: params.isThread ? "Discord Thread" : "Discord Conversation",
+  };
+}
+
 function normalizeDiscordTarget(
   raw: string | null | undefined,
   defaultKind: "user" | "channel",

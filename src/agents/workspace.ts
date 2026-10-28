@@ -12,9 +12,11 @@ import { retainMutationAuthority } from "../infra/mutation-authority.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
+import {
+  exactWorkspaceRelativePathExists,
+  resolveLegacyWorkspaceMemoryFile,
+} from "../memory/root-memory-files.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
@@ -33,6 +35,7 @@ import {
   hasGlobPattern,
   normalizeWorkspacePatternPath,
   resolveGlobWalkRoot,
+  resolveWorkspaceBootstrapFileName,
   resolveWorkspaceBootstrapPath,
   type WorkspaceBootstrapFile,
   type WorkspaceBootstrapFileName,
@@ -162,8 +165,6 @@ export type ExtraBootstrapLoadDiagnostic = {
   detail: string;
 };
 
-const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set(WORKSPACE_BOOTSTRAP_FILENAMES);
-
 const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set(
   WORKSPACE_ONBOARDING_PROFILE_FILENAMES,
 );
@@ -216,9 +217,6 @@ async function hasWorkspaceUserContentEvidence(
     } catch {
       // continue
     }
-  }
-  if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
-    return true;
   }
   return await hasWorkspaceSkillEvidence(dir);
 }
@@ -921,21 +919,28 @@ export async function loadWorkspaceBootstrapFiles(
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
+    const compatibleMemoryPath =
+      entry.name === DEFAULT_MEMORY_FILENAME &&
+      !(await exactWorkspaceRelativePathExists(resolvedDir, entry.name))
+        ? await resolveLegacyWorkspaceMemoryFile(resolvedDir)
+        : null;
+    const filePath = compatibleMemoryPath ?? entry.filePath;
     if (
       !access &&
       (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
-      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
+      !compatibleMemoryPath &&
+      !(await exactWorkspaceRelativePathExists(resolvedDir, entry.name))
     ) {
       continue;
     }
     const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
+      filePath,
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
       const file: WorkspaceBootstrapFile = {
         name: entry.name,
-        path: entry.filePath,
+        path: filePath,
         content: loaded.content,
         missing: false,
       };
@@ -958,13 +963,13 @@ export async function loadWorkspaceBootstrapFiles(
       );
       workspaceLogger.warn("Workspace bootstrap file is unreadable.", {
         fileName: entry.name,
-        filePath: entry.filePath,
+        filePath,
         reason,
-        consoleMessage: `Workspace bootstrap file is unreadable: file=${entry.filePath} reason=${reason}`,
+        consoleMessage: `Workspace bootstrap file is unreadable: file=${filePath} reason=${reason}`,
       });
       result.push({
         name: entry.name,
-        path: entry.filePath,
+        path: filePath,
         content: `[UNREADABLE: ${reason}]`,
         missing: false,
       });
@@ -988,7 +993,7 @@ type BootstrapSessionContext = {
   workspaceDir?: string;
 };
 
-function filterRootMemoryBootstrapFiles(
+function filterWorkspaceMemoryBootstrapFiles(
   files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
 ): WorkspaceBootstrapFile[] {
@@ -996,17 +1001,13 @@ function filterRootMemoryBootstrapFiles(
     return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
   }
   const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
-  const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
+  const workspaceMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
   return files.filter((file) => {
-    if (typeof file.path !== "string") {
-      return true;
-    }
     const filePath = file.path.trim();
     if (!filePath) {
       return true;
     }
-    const resolvedPath = resolveWorkspaceBootstrapPath(resolvedWorkspaceRoot, filePath);
-    return resolvedPath !== rootMemoryPath;
+    return resolveWorkspaceBootstrapPath(resolvedWorkspaceRoot, filePath) !== workspaceMemoryPath;
   });
 }
 
@@ -1014,23 +1015,21 @@ export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
 ): WorkspaceBootstrapFile[] {
-  const { sessionKey, chatType, workspaceDir }: BootstrapSessionContext =
+  const { sessionKey, workspaceDir }: BootstrapSessionContext =
     typeof session === "string" ? { sessionKey: session } : (session ?? {});
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
-  const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  const isNonPrivate =
-    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
-  const privacyFilteredFiles = isNonPrivate
-    ? filterRootMemoryBootstrapFiles(files, workspaceDir)
-    : files;
   if (isSubagent) {
-    return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+    return filterWorkspaceMemoryBootstrapFiles(files, workspaceDir).filter((file) =>
+      SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name),
+    );
   }
   if (isCron) {
-    return privacyFilteredFiles.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+    return filterWorkspaceMemoryBootstrapFiles(files, workspaceDir).filter((file) =>
+      CRON_BOOTSTRAP_ALLOWLIST.has(file.name),
+    );
   }
-  return privacyFilteredFiles;
+  return files;
 }
 
 async function* walkWorkspaceFiles(
@@ -1172,12 +1171,12 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const files: WorkspaceBootstrapFile[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+    const bootstrapName = resolveWorkspaceBootstrapFileName(relPath);
+    if (!bootstrapName) {
       diagnostics.push({
         path: filePath,
         reason: "invalid-bootstrap-filename",
-        detail: `unsupported bootstrap basename: ${baseName}`,
+        detail: `unsupported bootstrap basename: ${path.basename(relPath)}`,
       });
       continue;
     }
@@ -1187,7 +1186,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     });
     if (loaded.ok) {
       const file: WorkspaceBootstrapFile = {
-        name: baseName as WorkspaceBootstrapFileName,
+        name: bootstrapName,
         path: filePath,
         content: loaded.content,
         missing: false,

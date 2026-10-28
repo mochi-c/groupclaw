@@ -4,7 +4,10 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
+import {
+  MEMORY_HOST_WORKSPACE_RELATIVE_PATH,
+  normalizeConfiguredMemoryExtraPaths,
+} from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
@@ -24,8 +27,8 @@ import {
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
 import {
-  resolveCanonicalRootMemoryFile,
-  shouldSkipRootMemoryAuxiliaryPath,
+  resolveCanonicalWorkspaceMemoryFile,
+  shouldSkipWorkspaceMemoryAuxiliaryPath,
 } from "./openclaw-runtime-paths.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
@@ -171,7 +174,7 @@ export function isMemoryPath(relPath: string): boolean {
     return false;
   }
   if (
-    normalized === MEMORY_HOST_ROOT_FILENAME ||
+    normalized === MEMORY_HOST_WORKSPACE_RELATIVE_PATH ||
     normalized === "USER.md" ||
     normalized.toLowerCase() === "dreams.md"
   ) {
@@ -267,7 +270,7 @@ export async function listMemoryFiles(
   const memoryDir = path.join(workspaceDir, "memory");
 
   const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
-    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
+    shouldSkipWorkspaceMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
     const stat = await scanMemorySource(absPath, () => statEnumerableMemoryFile(absPath));
@@ -278,7 +281,7 @@ export async function listMemoryFiles(
   };
 
   const memoryFile = await scanMemorySource(workspaceDir, () =>
-    resolveCanonicalRootMemoryFile(workspaceDir),
+    resolveCanonicalWorkspaceMemoryFile(workspaceDir),
   );
   if (memoryFile) {
     await addMarkdownFile(memoryFile);

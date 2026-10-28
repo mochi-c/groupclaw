@@ -8,8 +8,10 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
 import {
   buildMemoryModelFilter,
+  buildMemoryPathFilter,
   projectMemorySearchRow,
   resolveSnippetProjection,
+  type MemoryPathFilter,
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
@@ -33,6 +35,7 @@ export async function searchVector(params: {
   runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
   runFallback: () => Promise<SearchRowResult[]>;
   sourceFilterVec: { sql: string; params: MemorySource[] };
+  memoryPathFilter?: MemoryPathFilter;
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
@@ -53,6 +56,7 @@ export async function searchVector(params: {
         limit: params.limit,
         snippetMaxChars: params.snippetMaxChars,
         sourceFilter: params.sourceFilterVec,
+        memoryPathFilter: params.memoryPathFilter,
       },
       params.signal,
     );
@@ -72,6 +76,7 @@ export async function searchChunksByEmbedding(params: {
   providerModel: string;
   providerModelAliases?: string[];
   sourceFilter: { sql: string; params: MemorySource[] };
+  memoryPathFilter?: MemoryPathFilter;
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
@@ -82,13 +87,14 @@ export async function searchChunksByEmbedding(params: {
   }
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
   const modelFilter = buildMemoryModelFilter("model", providerModels);
+  const pathFilter = buildMemoryPathFilter(params.memoryPathFilter);
   // Keep batches bounded instead of calling `.all()` across the entire chunks
   // table, and do not hold a sqlite iterator open across the setImmediate yield
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
   const projection = `SELECT rowid AS rowid, embedding
   FROM memory_index_chunks
  WHERE ${modelFilter}`;
-  const ordering = `${params.sourceFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
+  const ordering = `${params.sourceFilter.sql}${pathFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
   // The first batch includes zero and negative identities, including INT64_MIN;
   // later batches retain an indexed range predicate and the exact native cursor.
   const firstStmt = params.db.prepare(`${projection}${ordering}`);
@@ -111,12 +117,14 @@ export async function searchChunksByEmbedding(params: {
         ? firstStmt.iterate(
             ...providerModels,
             ...params.sourceFilter.params,
+            ...pathFilter.params,
             FALLBACK_VECTOR_BATCH_SIZE,
           )
         : stmt.iterate(
             ...providerModels,
             lastRowid,
             ...params.sourceFilter.params,
+            ...pathFilter.params,
             FALLBACK_VECTOR_BATCH_SIZE,
           );
     // SAFETY: Both scans read INTEGER rowids as bigint and embeddings from a STRICT BLOB column.

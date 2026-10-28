@@ -263,3 +263,38 @@ export function resolveSandboxConfigForAgent(
     }),
   };
 }
+
+/** Keep runtime/image resource choices, but never transfer ambient host authority to a project. */
+export function resolveIsolatedSandboxConfig(configured: SandboxConfig): SandboxConfig {
+  if (configured.backend !== "docker" && configured.backend !== "podman") {
+    throw new Error(
+      "Conversation scripts require a local Docker or Podman isolated project sandbox.",
+    );
+  }
+  const defaults = resolveSandboxConfigForAgent();
+  return {
+    ...configured,
+    scope: "agent",
+    workspaceAccess: "none",
+    dockerTmpfsSource: "default",
+    docker: {
+      ...defaults.docker,
+      image: configured.docker.image,
+      containerPrefix: configured.docker.containerPrefix,
+      workdir: configured.docker.workdir,
+      user: configured.docker.user,
+      pidsLimit: configured.docker.pidsLimit,
+      memory: configured.docker.memory,
+      memorySwap: configured.docker.memorySwap,
+      cpus: configured.docker.cpus,
+      ulimits: configured.docker.ulimits,
+      network: configured.docker.network === "bridge" ? "bridge" : "none",
+      env: {},
+      binds: undefined,
+      dangerouslyAllowReservedContainerTargets: false,
+      dangerouslyAllowExternalBindSources: false,
+      dangerouslyAllowContainerNamespaceJoin: false,
+    },
+    browser: { ...defaults.browser, enabled: false, allowHostControl: false },
+  };
+}

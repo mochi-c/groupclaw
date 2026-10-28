@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHookConfig } from "../hooks/policy.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { CANONICAL_ROOT_MEMORY_FILENAME } from "../memory/root-memory-files.js";
+import {
+  isCuratedMemoryRelativePath,
+  WORKSPACE_MEMORY_RELATIVE_PATH,
+} from "../memory/scoped-memory.js";
 
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
@@ -13,7 +16,7 @@ export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
 export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
-export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
+export const DEFAULT_MEMORY_FILENAME = WORKSPACE_MEMORY_RELATIVE_PATH;
 export const GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES = [
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -36,6 +39,15 @@ export const WORKSPACE_BOOTSTRAP_FILENAMES = [
 ] as const;
 
 export type WorkspaceBootstrapFileName = (typeof WORKSPACE_BOOTSTRAP_FILENAMES)[number];
+
+const WORKSPACE_BOOTSTRAP_NAMES_BY_BASENAME: ReadonlyMap<string, WorkspaceBootstrapFileName> =
+  new Map(WORKSPACE_BOOTSTRAP_FILENAMES.map((name) => [path.basename(name), name]));
+
+export function resolveWorkspaceBootstrapFileName(
+  filePath: string,
+): WorkspaceBootstrapFileName | undefined {
+  return WORKSPACE_BOOTSTRAP_NAMES_BY_BASENAME.get(path.basename(filePath));
+}
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -138,11 +150,12 @@ export function createWorkspaceBootstrapFilePolicy(params: {
     value.split("/").every((part) => part !== "" && part !== "." && part !== "..");
   return {
     canRead(relativePath) {
-      if (!isRelativePath(relativePath) || !names.has(path.basename(relativePath))) {
+      if (!isRelativePath(relativePath) || !resolveWorkspaceBootstrapFileName(relativePath)) {
         return false;
       }
       return (
         names.has(relativePath) ||
+        isCuratedMemoryRelativePath(relativePath) ||
         literals.has(relativePath) ||
         globs.some(({ matcher }) => matcher.match(normalizeWorkspacePatternPath(relativePath)))
       );

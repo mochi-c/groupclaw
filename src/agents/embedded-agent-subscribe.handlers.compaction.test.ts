@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  registerInternalHook,
+  unregisterInternalHook,
+  type InternalHookEvent,
+} from "../hooks/internal-hooks.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -156,6 +161,11 @@ describe("compaction handlers", () => {
         loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
       );
       const onAgentEvent = vi.fn();
+      const memoryEvents: InternalHookEvent[] = [];
+      const memoryListener = (event: InternalHookEvent) => {
+        memoryEvents.push(event);
+      };
+      registerInternalHook("session:compacted", memoryListener);
       const { emit, subscription } = createSubscribedSessionHarness({
         ...options,
         runId,
@@ -175,6 +185,18 @@ describe("compaction handlers", () => {
         emit(completedCompactionEnd());
         emit(completedCompactionEnd());
         await subscription.waitForPendingEvents();
+        expect(memoryEvents).toHaveLength(expectedEventCount);
+        if (expectedEventCount > 0) {
+          expect(memoryEvents[0]).toMatchObject({
+            sessionKey,
+            context: {
+              agentId,
+              tokensBefore: 100,
+              tokensAfter: 50,
+              sessionEntry: { sessionId: "session-1" },
+            },
+          });
+        }
         if (sql) {
           expect(sql.count()).toBe(0);
           sql.restore();
@@ -205,6 +227,7 @@ describe("compaction handlers", () => {
           expect(after).toEqual(before);
         }
       } finally {
+        unregisterInternalHook("session:compacted", memoryListener);
         sql?.restore();
         subscription.unsubscribe();
       }

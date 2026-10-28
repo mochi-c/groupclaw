@@ -20,6 +20,7 @@ const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
+const SCOPED_MEMORY_PATH_RE = /(?:^|\/)memory\/(?:Channel|User)\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 export const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
@@ -496,6 +497,7 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   return (
     !DREAMING_MEMORY_PATH_RE.test(normalized) &&
+    !SCOPED_MEMORY_PATH_RE.test(normalized) &&
     (SHORT_TERM_PATH_RE.test(normalized) ||
       SHORT_TERM_SESSION_CORPUS_RE.test(normalized) ||
       SHORT_TERM_BASENAME_RE.test(normalized))

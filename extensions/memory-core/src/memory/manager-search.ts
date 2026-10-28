@@ -8,8 +8,10 @@ import {
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { bm25RankToScore, buildFtsQuery, buildMatchQueryFromTerms } from "./keyword-query.js";
 import {
+  buildMemoryPathFilter,
   projectMemorySearchRow,
   resolveSnippetProjection,
+  type MemoryPathFilter,
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
@@ -304,6 +306,7 @@ export async function searchKeyword(params: {
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
+  memoryPathFilter?: MemoryPathFilter;
   boostFallbackRanking?: boolean;
   rankingQuery?: string;
 }): Promise<Array<SearchRowResult & { textScore: number; hasBodyMatch: true }>> {
@@ -321,6 +324,7 @@ export async function searchKeyword(params: {
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
   const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
+  const pathFilter = buildMemoryPathFilter(params.memoryPathFilter, params.ftsTable);
   const loadRows = (
     matchQuery: string | null,
     terms: string[],
@@ -339,7 +343,7 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       ${matchQuery ? `${params.ftsTable}.rank` : "0"} AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}\n` +
+          ` WHERE ${matchClause}${filter}${liveChunkClause}${params.sourceFilter.sql}${pathFilter.sql}\n` +
           (matchQuery ? ` ORDER BY rank ASC\n` : "") +
           ` LIMIT ?`,
       )
@@ -347,6 +351,7 @@ export async function searchKeyword(params: {
         ...(matchQuery ? [matchQuery] : []),
         ...terms,
         ...params.sourceFilter.params,
+        ...pathFilter.params,
         params.limit,
       ) as Array<MemorySearchRow & { rank: number }>;
   };
@@ -398,12 +403,14 @@ export async function searchPathKeyword(params: {
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: MemorySource[] };
+  memoryPathFilter?: MemoryPathFilter;
 }): Promise<PathKeywordSearchResult[]> {
   if (params.limit <= 0) {
     return [];
   }
   const snippet = resolveSnippetProjection("c.text", params.snippetMaxChars);
   const pathColumn = `${params.pathFtsTable}.path`;
+  const pathFilter = buildMemoryPathFilter(params.memoryPathFilter, params.pathFtsTable);
   const pathPlans = planPathKeywordSearch({
     query: params.query,
     ftsTokenizer: params.ftsTokenizer,
@@ -437,7 +444,7 @@ export async function searchPathKeyword(params: {
       ? `candidates AS MATERIALIZED (\n` +
         `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
         `    FROM ${params.pathFtsTable}\n` +
-        `   WHERE ${plan.matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${planSubstringFilter}${params.sourceFilter.sql}\n` +
+        `   WHERE ${plan.matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${planSubstringFilter}${params.sourceFilter.sql}${pathFilter.sql}\n` +
         `), pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT path, source FROM candidates\n` +
         `   WHERE (${exactCandidatePatterns.map(() => "path LIKE ? ESCAPE '\\'").join(" OR ")})\n` +
@@ -445,16 +452,17 @@ export async function searchPathKeyword(params: {
       : `pattern_candidates AS MATERIALIZED (\n` +
         `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source\n` +
         `    FROM ${params.pathFtsTable}\n` +
-        `   WHERE (${qualifiedPatternClause})${params.sourceFilter.sql}\n` +
+        `   WHERE (${qualifiedPatternClause})${params.sourceFilter.sql}${pathFilter.sql}\n` +
         `)`;
     const candidateParams = useLexicalCandidates
       ? [
           ...(plan.matchQuery ? [plan.matchQuery] : []),
           ...plan.substringTerms,
           ...params.sourceFilter.params,
+          ...pathFilter.params,
           ...exactCandidatePatterns,
         ]
-      : [...exactCandidatePatterns, ...params.sourceFilter.params];
+      : [...exactCandidatePatterns, ...params.sourceFilter.params, ...pathFilter.params];
     return params.db
       .prepare(
         `WITH ${candidateCtes}, scored_paths AS MATERIALIZED (\n` +
@@ -524,6 +532,7 @@ export async function searchPathKeyword(params: {
       ...(matchQuery ? [matchQuery] : []),
       ...terms,
       ...params.sourceFilter.params,
+      ...pathFilter.params,
     ];
     // Filter empty sources before LIMIT, then resolve first chunks only for the
     // retained paths. Keep both phases in the same statement's read snapshot.
@@ -533,7 +542,7 @@ export async function searchPathKeyword(params: {
           `  SELECT ${params.pathFtsTable}.path, ${params.pathFtsTable}.source,\n` +
           `         ${matchQuery ? `bm25(${params.pathFtsTable})` : "0"} AS rank\n` +
           `    FROM ${params.pathFtsTable}\n` +
-          `   WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter}${params.sourceFilter.sql}${qualifiedSpecificityClause}\n` +
+          `   WHERE ${matchQuery ? `${params.pathFtsTable} MATCH ?` : "1=1"}${filter}${params.sourceFilter.sql}${pathFilter.sql}${qualifiedSpecificityClause}\n` +
           `     AND EXISTS (SELECT 1 FROM memory_index_chunks live\n` +
           `                  WHERE live.path = ${params.pathFtsTable}.path\n` +
           `                    AND live.source = ${params.pathFtsTable}.source)\n` +

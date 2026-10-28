@@ -14,6 +14,7 @@ import {
 } from "./package-update-activation-paths.js";
 import { isPathInside } from "./path-guards.js";
 import { collectGitRuntimeErrors, readGitRuntimeArtifactIdentity } from "./update-git-runtime.js";
+import { writeImmutableGenerationManifest } from "./update-immutable-generation-manifest.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import type { CommandRunner } from "./update-runner-types.js";
 
@@ -40,19 +41,30 @@ export function resolveImmutableGenerationEnv(
   };
 }
 
-async function inspectGenerationTree(root: string, sealed: boolean): Promise<GenerationEntry[]> {
+export async function inspectImmutableGenerationTree(
+  root: string,
+  sealed: boolean,
+  symlinks: "contained" | "unlink" = "contained",
+): Promise<GenerationEntry[]> {
   const physicalRoot = await fs.realpath(root);
   if (physicalRoot !== path.resolve(root)) {
     throw new Error("Immutable generation must be a physical directory.");
   }
+  const rootStat = await fs.lstat(root);
   const entries: GenerationEntry[] = [];
   const visit = async (file: string): Promise<void> => {
     const stat = await fs.lstat(file);
     if (stat.uid !== 0) {
       throw new Error(`Immutable generation is not root-owned: ${file}`);
     }
+    if (
+      stat.dev !== rootStat.dev ||
+      (!sealed && (stat.mode & 0o022) !== 0 && !stat.isSymbolicLink())
+    ) {
+      throw new Error(`Immutable generation contains an unprotected or mounted entry: ${file}`);
+    }
     if (stat.isSymbolicLink()) {
-      if (!isPathInside(root, await fs.realpath(file))) {
+      if (symlinks === "contained" && !isPathInside(root, await fs.realpath(file))) {
         throw new Error(`Immutable generation symlink escapes its release: ${file}`);
       }
     } else {
@@ -81,22 +93,46 @@ async function inspectGenerationTree(root: string, sealed: boolean): Promise<Gen
 }
 
 /** Seal a private, fully materialized tree; never chmod pnpm's shared store or symlink targets. */
-export async function sealImmutableGeneration(root: string): Promise<void> {
-  const entries = await inspectGenerationTree(root, false);
-  for (const { file, stat } of entries) {
+export async function sealImmutableGeneration(
+  root: string,
+  ownership?: Parameters<typeof writeImmutableGenerationManifest>[1],
+  assertCurrent: () => void = () => {},
+): Promise<void> {
+  const entries = await inspectImmutableGenerationTree(root, false);
+  const seal = async ({ file, stat }: GenerationEntry) => {
     if (stat.isSymbolicLink()) {
-      continue;
+      return;
     }
     const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const current = await handle.stat();
-      if (current.dev !== stat.dev || current.ino !== stat.ino || current.nlink !== stat.nlink) {
+      if (
+        current.dev !== stat.dev ||
+        current.ino !== stat.ino ||
+        (stat.isFile() && current.nlink !== stat.nlink)
+      ) {
         throw new Error(`Immutable generation changed while sealing: ${file}`);
       }
+      assertCurrent();
       await handle.chmod(stat.isDirectory() ? 0o555 : 0o444 | (stat.mode & 0o111));
       await handle.sync();
     } finally {
       await handle.close();
+    }
+  };
+  for (const entry of entries) {
+    if (!entry.stat.isDirectory()) {
+      await seal(entry);
+    }
+  }
+  if (ownership) {
+    const artifact = await readGitRuntimeArtifactIdentity(root);
+    assertCurrent();
+    writeImmutableGenerationManifest(root, ownership, artifact.distDigest);
+  }
+  for (const entry of entries) {
+    if (entry.stat.isDirectory()) {
+      await seal(entry);
     }
   }
 }
@@ -146,7 +182,7 @@ export async function verifyImmutableGeneration(
     throw new Error("Immutable generation requires an exact full commit SHA.");
   }
   const sealed = options.sealed !== false;
-  await inspectGenerationTree(root, sealed);
+  await inspectImmutableGenerationTree(root, sealed);
   if (sealed && !(await fs.lstat(path.join(root, ".git"))).isDirectory()) {
     throw new Error("A sealed generation requires its own Git metadata directory.");
   }

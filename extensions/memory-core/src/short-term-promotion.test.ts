@@ -1,6 +1,5 @@
 // Memory Core tests cover short term promotion plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -8,7 +7,7 @@ import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
+import { describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { previewRemDreaming } from "./dreaming-phases.js";
@@ -40,31 +39,26 @@ import {
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
   recordRemConsideredPhaseSignals,
-  recordShortTermRecalls,
   readLightStagedKeys,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 import {
+  allPromotionThresholds,
+  applyAllCandidates,
+  createShortTermPromotionFixture,
+  memoryRecallResult,
+  rankAllCandidates,
+  recordMemoryRecalls,
+  recordRotateCredentialsRecall,
+  writeDailyMemoryNote,
+} from "./short-term-promotion.test-support.js";
+import {
   configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
   shortTermTestState as testing,
 } from "./test-helpers.js";
 
-type RecordRecallParams = Parameters<typeof recordShortTermRecalls>[0];
-type RecallResult = RecordRecallParams["results"][number];
-type RecallResultExtras = Partial<
-  Omit<RecallResult, "path" | "startLine" | "endLine" | "score" | "snippet" | "source">
->;
-type RankAllOptions = Omit<
-  Parameters<typeof rankShortTermPromotionCandidates>[0],
-  "workspaceDir" | "minScore" | "minRecallCount" | "minUniqueQueries"
->;
-type ApplyAllOptions = Omit<
-  Parameters<typeof applyShortTermPromotions>[0],
-  "workspaceDir" | "candidates" | "minScore" | "minRecallCount" | "minUniqueQueries"
->;
 type PromotionCandidate = Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>[number];
 type GroundedCandidateFixture = Parameters<
   typeof recordGroundedShortTermCandidates
@@ -74,49 +68,6 @@ type PromotionCandidateFixture = Pick<
   "key" | "path" | "startLine" | "endLine" | "source" | "snippet"
 > &
   Partial<PromotionCandidate>;
-
-const allPromotionThresholds = {
-  minScore: 0,
-  minRecallCount: 0,
-  minUniqueQueries: 0,
-} as const;
-
-function memoryRecallResult(
-  memoryPath: string,
-  startLine: number,
-  endLine: number,
-  score: number,
-  snippet: string,
-  extras: RecallResultExtras = {},
-): RecallResult {
-  return { ...extras, path: memoryPath, startLine, endLine, score, snippet, source: "memory" };
-}
-
-function recordMemoryRecalls(
-  workspaceDir: string,
-  query: string,
-  results: RecallResult[],
-  options: Omit<RecordRecallParams, "workspaceDir" | "query" | "results"> = {},
-): Promise<void> {
-  return recordShortTermRecalls({ ...options, workspaceDir, query, results });
-}
-
-function rankAllCandidates(workspaceDir: string, options: RankAllOptions = {}) {
-  return rankShortTermPromotionCandidates({ ...options, workspaceDir, ...allPromotionThresholds });
-}
-
-function applyAllCandidates(
-  workspaceDir: string,
-  candidates: Parameters<typeof applyShortTermPromotions>[0]["candidates"],
-  options: ApplyAllOptions = {},
-) {
-  return applyShortTermPromotions({
-    ...options,
-    workspaceDir,
-    candidates,
-    ...allPromotionThresholds,
-  });
-}
 
 function promotionCandidateFixture(params: PromotionCandidateFixture): PromotionCandidate {
   return {
@@ -180,47 +131,7 @@ function groundedCandidateFixture(
 }
 
 describe("short-term promotion", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  beforeAll(async () => {
-    await configureMemoryCoreDreamingStateForTests();
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-promote-"));
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-    resetMemoryCoreDreamingStateForTests();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
-    const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
-    await run(workspaceDir);
-  }
-
-  type WorkspaceTest = (title: string, run: (workspaceDir: string) => Promise<void>) => void;
-  const it: WorkspaceTest = (title, run) =>
-    baseIt(title, async () => {
-      await withTempWorkspace(run);
-    });
-
-  async function writeDailyMemoryNote(
-    workspaceDir: string,
-    date: string,
-    lines: string[],
-  ): Promise<string> {
-    const notePath = path.join(workspaceDir, "memory", `${date}.md`);
-    await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
-    return notePath;
-  }
+  const { it, withTempWorkspace } = createShortTermPromotionFixture();
 
   async function promoteDailyHeadingSnippet(
     workspaceDir: string,
@@ -287,23 +198,6 @@ describe("short-term promotion", () => {
       ),
     ]);
     return await rankAllCandidates(workspaceDir);
-  }
-
-  function recordRotateCredentialsRecall(workspaceDir: string): Promise<void> {
-    return recordMemoryRecalls(
-      workspaceDir,
-      "rotate creds",
-      [
-        memoryRecallResult(
-          "memory/2026-04-29.md",
-          3,
-          3,
-          0.96,
-          "Rotate the staging Postgres credentials before next deploy.",
-        ),
-      ],
-      { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-    );
   }
 
   function requireCandidateKey(
@@ -688,7 +582,9 @@ describe("short-term promotion", () => {
     );
 
     await applyAllCandidates(workspaceDir, candidates);
-    await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toContain(
+    await expect(
+      fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8"),
+    ).resolves.toContain(
       "<!-- project: path:/Users/Alice/Repo; path:/Users/alice/repo; github.com/OpenClaw/OpenClaw -->",
     );
   });
@@ -994,7 +890,7 @@ describe("short-term promotion", () => {
     });
 
     expect(applied.applied).toBe(1);
-    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memory).toContain('Always use "Happy Together" calendar');
   });
 
@@ -1348,7 +1244,7 @@ describe("short-term promotion", () => {
     expect(secondApply.appended).toBe(0);
     expect(secondApply.reconciledExisting).toBe(1);
 
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memoryText).toContain(
       "<!-- openclaw-memory-promotion:memory:memory/project alpha/2026-04-01.md:2:2 -->",
     );
@@ -1453,7 +1349,7 @@ describe("short-term promotion", () => {
         entry.partial ? expect.stringContaining(entry.reason) : entry.reason,
       );
       expect(applied.rejectedCandidates[0]?.category).toBe(entry.category);
-      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8"));
     });
   });
 
@@ -1521,7 +1417,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     const memoryText = await fs
-      .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+      .readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8")
       .catch(() => "");
     expect(memoryText).not.toContain("Promoted From Short-Term Memory");
     expect(memoryText).not.toMatch(/openclaw:dreaming/i);
@@ -1576,7 +1472,7 @@ describe("short-term promotion", () => {
 
     expect(applied.applied).toBe(0);
     const memoryText = await fs
-      .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+      .readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8")
       .catch(() => "");
     expect(memoryText).not.toContain("Promoted From Short-Term Memory");
     expect(memoryText).not.toContain("staged dream scratchwork");
@@ -1587,7 +1483,7 @@ describe("short-term promotion", () => {
     const applied = await applyAllCandidates(workspaceDir, ranked);
     expect(applied.applied).toBe(1);
 
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Promoted From Short-Term Memory");
     expect(memoryText).toContain("memory/2026-04-01.md:10-10");
     expect(memoryText).toMatch(/<!-- trigger: [^\n]* --> <!-- importance: \d+ -->/u);
@@ -1603,7 +1499,7 @@ describe("short-term promotion", () => {
       /^\d{4}-\d{2}-\d{2}T/,
     );
     expect((await applyAllCandidates(workspaceDir, ranked)).applied).toBe(0);
-    const afterRetry = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const afterRetry = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(afterRetry.match(/Promoted From Short-Term Memory/g)).toHaveLength(1);
   });
 
@@ -1644,7 +1540,7 @@ describe("short-term promotion", () => {
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates[0]?.reason).toBe("origin filter (untrusted)");
     expect(applied.rejectedCandidates[0]?.category).toBe("origin");
-    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8"));
   });
 
   it("excludes a candidate downgraded during consolidation from the fallback write", async (workspaceDir) => {
@@ -1697,7 +1593,7 @@ describe("short-term promotion", () => {
     expect(complete).toHaveBeenCalledOnce();
     expect(applied.appliedCandidates.map((candidate) => candidate.startLine)).toEqual([2]);
     expect(applied.rejectedCandidates.map(({ candidate }) => candidate.startLine)).toEqual([1]);
-    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memory).not.toContain(firstSnippet);
     expect(memory).toContain(secondSnippet);
   });
@@ -1721,7 +1617,7 @@ describe("short-term promotion", () => {
     const applied = await applyAllCandidates(workspaceDir, ranked);
 
     expect(applied.applied).toBe(1);
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("- Gateway binds loopback and port 18789");
     expect(memoryText).not.toContain("- - Gateway binds loopback and port 18789");
   });
@@ -1744,7 +1640,7 @@ describe("short-term promotion", () => {
     });
 
     expect(applied.applied).toBe(1);
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     const promotedLine = memoryText
       .split("\n")
       .find((line) => line.startsWith("- HanJammer reviewed the dashboard state"));
@@ -1803,12 +1699,12 @@ describe("short-term promotion", () => {
       const applied = await applyAllCandidates(workspaceDir, await rankAllCandidates(workspaceDir));
       expect(applied.applied).toBe(relocated.length ? 1 : 0);
       if (!relocated.length) {
-        await expectEnoent(fs.access(path.join(workspaceDir, "MEMORY.md")));
+        await expectEnoent(fs.access(path.join(workspaceDir, "memory", "MEMORY.md")));
         return;
       }
       expect(applied.appliedCandidates[0]?.startLine).toBe(relocated[0]);
       expect(applied.appliedCandidates[0]?.endLine).toBe(relocated[1]);
-      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
       expect(memoryText).toContain(`memory/2026-04-01.md:${relocated[0]}-${relocated[1]}`);
     });
   });
@@ -1945,7 +1841,7 @@ describe("short-term promotion", () => {
         endLine,
         snippet: entry.expected,
       });
-      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
       expect(memoryText).toContain(`memory/2026-05-28.md:${startLine}-${endLine}`);
       expect(memoryText).toContain(entry.expected);
       expect(Buffer.from(memoryText, "utf8").toString("utf8")).toBe(memoryText);
@@ -2004,7 +1900,7 @@ describe("short-term promotion", () => {
     ]);
 
     expect(applied.applied).toBe(1);
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("source=2026-04-01.md:1-1");
   });
 
@@ -2039,7 +1935,7 @@ describe("short-term promotion", () => {
     });
 
     expect(applied.applied).toBe(1);
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Promoted From Short-Term Memory (2026-04-01)");
     for (const [now, promotedToday] of [
       ["2026-04-02T06:59:59.000Z", 1],
@@ -2618,7 +2514,7 @@ describe("short-term promotion", () => {
         "",
         "Rotate the staging Postgres credentials before next deploy.",
       ]);
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
       const filler = "x".repeat(600);
       await fs.writeFile(
         memoryPath,
@@ -2705,7 +2601,7 @@ describe("short-term promotion", () => {
         "A short snippet that fits comfortably.",
       ]);
 
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
       const seeded = "# Long-Term Memory\n\nSome small existing content.\n";
       await fs.writeFile(memoryPath, seeded, "utf-8");
       if (process.platform !== "win32") {
@@ -2762,7 +2658,7 @@ describe("short-term promotion", () => {
         { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
       );
       const ranked = await rankAllCandidates(workspaceDir);
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
       const oversizedBase = `# Long-Term Memory\n\n${"u".repeat(8_800)}\n`;
       await fs.writeFile(memoryPath, oversizedBase, "utf-8");
       const consolidate = vi.fn(async () => ({ text: "unused" }));
@@ -2811,7 +2707,7 @@ describe("short-term promotion", () => {
         ],
         { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
       );
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
       const existing = ["2026-04-01", "2026-04-08", "2026-04-15", "2026-04-22"]
         .map(
           (date, index) =>
@@ -2879,183 +2775,15 @@ describe("short-term promotion", () => {
     });
 
     expect(applied).toMatchObject({ applied: 0, appended: 0 });
-    await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).rejects.toMatchObject({
+    await expect(
+      fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8"),
+    ).rejects.toMatchObject({
       code: "ENOENT",
     });
     const retryable = await rankAllCandidates(workspaceDir, {
       nowMs: Date.parse("2026-04-30T10:00:00.000Z"),
     });
     expect(retryable.map((entry) => entry.key)).toContain(candidate.key);
-  });
-
-  describe("MEMORY.md atomic promotion write", () => {
-    baseIt.runIf(process.platform !== "win32")(
-      "preserves a dangling MEMORY.md symlink and its target directory mode",
-      async () => {
-        await withTempWorkspace(async (workspaceDir) => {
-          await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-            "Keep the shared memory target and directory permissions intact.",
-          ]);
-
-          const aliasParent = path.join(fixtureRoot, `alias-${caseId++}`, "nested");
-          const workspaceAlias = path.join(aliasParent, "workspace");
-          const sharedDir = path.join(fixtureRoot, `${path.basename(workspaceDir)}-shared`);
-          const linkedDir = path.join(workspaceDir, "linked");
-          const intermediatePath = path.join(sharedDir, "memory-alias.md");
-          const targetPath = path.join(sharedDir, `${"long".repeat(55)}\\`);
-          const memoryPath = path.join(workspaceDir, "MEMORY.md");
-          await fs.mkdir(aliasParent, { recursive: true });
-          await fs.mkdir(path.join(sharedDir, "nested"), { recursive: true });
-          await fs.chmod(sharedDir, 0o755);
-          await fs.symlink(workspaceDir, workspaceAlias);
-          await fs.symlink(path.join(sharedDir, "nested"), linkedDir);
-          await fs.symlink(path.basename(targetPath), intermediatePath);
-          await fs.symlink("invalid-target.md/", memoryPath);
-
-          await recordMemoryRecalls(
-            workspaceAlias,
-            "shared memory",
-            [
-              memoryRecallResult(
-                "memory/2026-04-29.md",
-                1,
-                1,
-                0.96,
-                "Keep the shared memory target and directory permissions intact.",
-              ),
-            ],
-            { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-          );
-          const ranked = await rankAllCandidates(workspaceAlias);
-
-          await expect(
-            applyShortTermPromotions({
-              workspaceDir: workspaceAlias,
-              candidates: ranked,
-              minScore: 0,
-              minRecallCount: 0,
-              minUniqueQueries: 0,
-            }),
-          ).rejects.toMatchObject({ code: "ENOENT" });
-          await expectEnoent(fs.lstat(path.join(workspaceDir, "invalid-target.md")));
-          await fs.unlink(memoryPath);
-          await fs.symlink("linked/../memory-alias.md", memoryPath);
-
-          await applyAllCandidates(workspaceAlias, ranked);
-
-          expect((await fs.lstat(memoryPath)).isSymbolicLink()).toBe(true);
-          expect((await fs.lstat(intermediatePath)).isSymbolicLink()).toBe(true);
-          expect(await fs.readFile(targetPath, "utf-8")).toContain(
-            "Keep the shared memory target and directory permissions intact.",
-          );
-          expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o755);
-
-          const secondSnippet = "Keep writing through a shared read-only directory.";
-          const lexicalCollisionPath = path.join(workspaceDir, "memory-alias.md");
-          await fs.writeFile(lexicalCollisionPath, "Do not overwrite this lexical collision.");
-          await writeDailyMemoryNote(workspaceDir, "2026-04-30", [secondSnippet]);
-          await recordMemoryRecalls(
-            workspaceAlias,
-            "read-only parent",
-            [memoryRecallResult("memory/2026-04-30.md", 1, 1, 0.96, secondSnippet)],
-            { nowMs: Date.parse("2026-04-30T10:00:00.000Z") },
-          );
-          const secondRanked = await rankAllCandidates(workspaceAlias);
-
-          await fs.chmod(targetPath, 0o600);
-          await fs.chmod(sharedDir, 0o555);
-          try {
-            const applied = await applyAllCandidates(workspaceAlias, secondRanked, {
-              memoryFileMaxChars: 400,
-              maxPriorEntryLossFraction: 1,
-            });
-            expect(applied.applied).toBe(1);
-            expect(await fs.readFile(targetPath, "utf-8")).toContain(secondSnippet);
-            expect(await fs.readFile(lexicalCollisionPath, "utf-8")).toBe(
-              "Do not overwrite this lexical collision.",
-            );
-            expect((await fs.stat(sharedDir)).mode & 0o7777).toBe(0o555);
-          } finally {
-            await fs.chmod(sharedDir, 0o755);
-          }
-        });
-      },
-    );
-
-    it("preserves the existing MEMORY.md when the promotion write fails mid-flight", async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-        "Notes",
-        "",
-        "Rotate the staging Postgres credentials before next deploy.",
-      ]);
-
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
-      const sentinel = "FINAL-USER-MEMORY-SENTINEL-do-not-lose";
-      const filler = "pad line filler content ".repeat(9_000);
-      const seeded = `# Long-Term Memory\n\n${filler}\n- ${sentinel}\n`;
-      await fs.writeFile(memoryPath, seeded, "utf-8");
-
-      await recordRotateCredentialsRecall(workspaceDir);
-
-      const ranked = await rankAllCandidates(workspaceDir);
-
-      const truncateAt = 51_200;
-      const originalOpen = fs.open.bind(fs);
-      const originalWriteFile = fs.writeFile.bind(fs);
-      const promotionTempHandles = new WeakSet<object>();
-      vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
-        const handle = await originalOpen(target, flags, mode);
-        if (typeof target === "string" && path.basename(target).startsWith("MEMORY.md.promotion")) {
-          promotionTempHandles.add(handle);
-        }
-        return handle;
-      });
-      vi.spyOn(fs, "writeFile").mockImplementation((async (
-        target: Parameters<typeof fs.writeFile>[0],
-        data: Parameters<typeof fs.writeFile>[1],
-        options?: Parameters<typeof fs.writeFile>[2],
-      ) => {
-        const targetPath =
-          typeof target === "string" ? target : target instanceof URL ? target.pathname : "";
-        if (
-          (targetPath && path.basename(targetPath).startsWith("MEMORY.md")) ||
-          (typeof target === "object" && target !== null && promotionTempHandles.has(target))
-        ) {
-          const text = typeof data === "string" ? data : Buffer.from(data as Uint8Array).toString();
-          await originalWriteFile(target, text.slice(0, truncateAt), options);
-          throw Object.assign(new Error("EFBIG: file too large, write"), {
-            code: "EFBIG",
-          });
-        }
-        return originalWriteFile(target, data, options);
-      }) as typeof fs.writeFile);
-
-      await expect(
-        applyShortTermPromotions({
-          workspaceDir,
-          candidates: ranked,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
-          memoryFileMaxChars: 5_000_000,
-        }),
-      ).rejects.toMatchObject({ code: "EFBIG" });
-
-      const after = await fs.readFile(memoryPath, "utf-8");
-      expect(after).toBe(seeded);
-      await expect(
-        rankShortTermPromotionCandidates({
-          workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
-        }),
-      ).resolves.toHaveLength(1);
-      expect(
-        (await fs.readdir(workspaceDir)).filter((entry) => entry.startsWith("MEMORY.md.promotion")),
-      ).toEqual([]);
-    });
   });
 
   it("shows signalCount instead of just recallCount in promotion annotations", async (workspaceDir) => {
@@ -3090,7 +2818,7 @@ describe("short-term promotion", () => {
     const applied = await applyAllCandidates(workspaceDir, ranked, { nowMs });
 
     expect(applied.applied).toBe(1);
-    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
 
     expect(memoryText).toContain("signals=7");
     expect(memoryText).toContain("recalls=0");
@@ -3171,7 +2899,7 @@ describe("short-term promotion", () => {
         maxPromotedSnippetTokens: 2,
       });
 
-      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      const memoryText = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
       expect(memoryText).toContain(`- ${prefix}... [`);
       expect(memoryText).not.toContain("🚀");
     });

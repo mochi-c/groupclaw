@@ -174,6 +174,30 @@ describe("exec resolve_exec_env hook wiring", () => {
     mocks.spawnInputs.length = 0;
   });
 
+  it("keeps host execution environment hooks out of an isolated project", async () => {
+    installResolveExecEnvHook({ HOST_SECRET: "PRIVATE_HOST_BYTES" });
+    const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(
+      async (params) => ({
+        argv: ["isolated-fixture", params.command],
+        env: {},
+        stdinMode: "pipe-closed",
+      }),
+    );
+    const tool = createTestExecTool({
+      host: "sandbox",
+      preparedStoreEnvironment: {},
+      sandbox: backendSandboxConfig({
+        isolatedWorkspace: true,
+        validateWorkdir: async (workdir) => workdir,
+        buildExecSpec,
+      }),
+    });
+    await tool.execute("isolated-env", { command: "echo ok", env: { PROJECT_FLAG: "yes" } });
+    expect(mocks.hookRunner?.runResolveExecEnv).not.toHaveBeenCalled();
+    expect(buildExecSpec.mock.calls[0]?.[0]?.env).toMatchObject({ PROJECT_FLAG: "yes" });
+    expect(buildExecSpec.mock.calls[0]?.[0]?.env).not.toHaveProperty("HOST_SECRET");
+  });
+
   it("merges filtered plugin env into gateway execution and approval-visible requested env", async () => {
     installResolveExecEnvHook({
       EXISTING: "plugin",

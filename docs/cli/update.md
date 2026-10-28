@@ -271,7 +271,7 @@ refuse completion.
 Verified activation retires the operation record. A real activation failure may
 restore the sealed predecessor when the protected state remains compatible;
 rollback retains a resumable record. This slice does not rewind migrated
-databases or collect release directories. It supports matching database schema
+databases. It supports matching database schema
 contracts only; incompatible migration requirements refuse activation before
 drain. Canary rehearsal boots the candidate against isolated copies before
 cutover, preserving input that the candidate itself must migrate at startup.
@@ -376,6 +376,30 @@ the installation control or its native executor lease. It first validates a
 private recovered copy and acquires current ownership before allowing SQLite to
 repair the source. Ordinary update and status reads do not perform that repair.
 Repairing preparation-only metadata never enables activation.
+
+Successful immutable updates also attempt release-directory collection after
+activation finishes. Collection preserves the current release, its retained
+predecessor, prepared releases, and every observed process reference, including
+the updater itself. Pending activation recovery retains all releases.
+
+To inspect or retry collection separately:
+
+```bash
+sudo /usr/bin/node /opt/example/current/dist/index.js update cleanup-generations --root /opt/example --dry-run
+sudo /usr/bin/node /opt/example/current/dist/index.js update cleanup-generations --root /opt/example --json
+```
+
+New preparations seal an ownership manifest inside each release's private Git
+metadata. Collection verifies that manifest, physical directory identity, and
+build digest before retiring a release. Older releases without a manifest,
+operator backups, and unknown entries remain in place with a warning; adoption
+does not backfill ownership. Unreadable process references defer collection.
+Interrupted large-tree deletion retains the manifest and resumes on a later
+invocation. A crash after the final manifest removal can leave small unknown
+directory remnants, which remain available for operator inspection. Cleanup uses
+the existing five-minute budget and never changes a successful update outcome,
+service state, or migration-original retention. `update cleanup` keeps its
+separate migration recovery contract.
 
 The [immutable update design](/reference/team-immutable-update-design#three-proposed-prs)
 records the preparation, activation, and recovery contracts. Existing

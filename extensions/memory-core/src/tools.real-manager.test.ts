@@ -22,7 +22,12 @@ import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
 } from "./memory/manager-index.test-support.js";
-import { createMemoryGetTool, createMemorySearchTool, testing } from "./tools.js";
+import {
+  createMemoryGetTool,
+  createMemoryReadTool,
+  createMemorySearchTool,
+  testing,
+} from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
 const { MemoryIndexManager } = await import("./memory/manager.js");
@@ -141,9 +146,16 @@ describe("memory_search real manager", () => {
         const options = { config: cfg, agentId, oneShotCliRun: true };
         const search = searchTool(cfg, options);
         const get = createMemoryGetTool(options)!;
+        const read = createMemoryReadTool(options)!;
         const found = await search.execute("workspace-search", { query: marker, corpus: "memory" });
         const { results } = found.details as {
-          results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
+          results: Array<{
+            path: string;
+            startLine: number;
+            endLine: number;
+            snippet: string;
+            ref: string;
+          }>;
         };
         expect(results).toHaveLength(1);
         expect(results[0]).toMatchObject({
@@ -159,11 +171,77 @@ describe("memory_search real manager", () => {
           lines: hit.endLine - hit.startLine + 1,
         });
         expect(excerpt.details).toMatchObject({ status: "ok", text: marker });
+        const expanded = await read.execute("workspace-reference", { ref: hit.ref });
+        expect(expanded.details).toMatchObject({ status: "ok", text: marker, from: 1, lines: 1 });
+        const otherAgent = agentId === "main" ? "other" : "main";
+        const otherRead = createMemoryReadTool({ ...options, agentId: otherAgent })!;
+        await expect(
+          otherRead.execute("workspace-cross-agent", { ref: hit.ref }),
+        ).resolves.toMatchObject({
+          details: { status: "not_found", text: "" },
+        });
         const escaped = await get.execute("workspace-parent", { path: "../USER.md" });
         expect(escaped.details).toMatchObject({ status: "error", code: "MEMORY_PATH_NOT_ALLOWED" });
       }
     },
   );
+
+  it("expands a search reference and continues the current file without another search", async () => {
+    const cfg = keywordConfig();
+    const relativePath = "memory/引用.md";
+    await fs.writeFile(
+      path.join(fixture.paths.workspace, relativePath),
+      [
+        "Orchid reference marker.",
+        "Second line.",
+        "Third line.",
+        "Fourth line.",
+        "Fifth line.",
+      ].join("\n"),
+    );
+    await indexedManager(cfg);
+    const options = { config: cfg, agentId: "main" };
+    const result = await searchTool(cfg, options).execute("reference-search", {
+      query: "Orchid reference marker",
+      corpus: "memory",
+    });
+    const hit = (result.details as { results: Array<{ path: string; ref: string }> }).results[0]!;
+    expect(hit.path).toBe(relativePath);
+    const read = createMemoryReadTool(options)!;
+    const first = await read.execute("reference-first", { ref: hit.ref, lines: 2 });
+    expect(first.details).toMatchObject({
+      status: "ok",
+      from: 1,
+      lines: 2,
+      text: expect.stringContaining("Second line."),
+      truncated: true,
+    });
+    const second = await read.execute("reference-second", {
+      ref: (first.details as { nextRef: string }).nextRef,
+    });
+    expect(second.details).toMatchObject({
+      status: "ok",
+      from: 3,
+      lines: 2,
+      text: expect.stringContaining("Third line.\nFourth line."),
+      truncated: true,
+    });
+    const third = await read.execute("reference-third", {
+      ref: (second.details as { nextRef: string }).nextRef,
+    });
+    expect(third.details).toMatchObject({ status: "ok", from: 5, lines: 1, text: "Fifth line." });
+    expect(third.details).not.toHaveProperty("nextRef");
+    await fs.writeFile(path.join(fixture.paths.workspace, relativePath), "Updated artifact.");
+    await expect(
+      read.execute("reference-current-file", { ref: hit.ref, from: 1, lines: 1 }),
+    ).resolves.toMatchObject({
+      details: { status: "ok", text: "Updated artifact." },
+    });
+    await fs.rm(path.join(fixture.paths.workspace, relativePath));
+    await expect(read.execute("reference-removed", { ref: hit.ref })).resolves.toMatchObject({
+      details: { status: "not_found", text: "" },
+    });
+  });
 
   it.each([
     {
@@ -241,6 +319,7 @@ describe("memory_search real manager", () => {
       source: "sessions",
       path: "sessions/main/excerpt-proof.jsonl",
     });
+    expect(results[0]).not.toHaveProperty("ref");
     const excerpt = await get.execute("session-excerpt", {
       path: results[0]!.path,
       from: results[0]!.startLine,
@@ -252,6 +331,15 @@ describe("memory_search real manager", () => {
       text: "",
     });
     expect(excerpt.details).not.toHaveProperty("disabled");
+    const read = createMemoryReadTool(options)!;
+    const forgedSessionRef =
+      "memory:v1:" +
+      Buffer.from(JSON.stringify(["main", results[0]!.path, 1, 3])).toString("base64url");
+    await expect(
+      read.execute("session-forged-reference", { ref: forgedSessionRef }),
+    ).resolves.toMatchObject({
+      details: { status: "error", code: "MEMORY_PATH_NOT_ALLOWED", text: "" },
+    });
     const memory = await get.execute("memory-excerpt", {
       path: memoryPath,
       from: 2,
@@ -428,6 +516,89 @@ describe("memory_search real manager", () => {
       releaseMaintenance.resolve();
       getSpy.mockRestore();
     }
+  });
+
+  it("recalls current Thread memory beyond 200 higher-ranked excluded Channels", async () => {
+    const cfg = createConfig({ vectorEnabled: false });
+    cfg.memory = { ...cfg.memory, citations: "off" };
+    await fs.writeFile(path.join(fixture.paths.workspace, memoryPath), "Unrelated baseline.");
+    const threadPath = "memory/Channel/launch/Thread/current";
+    const hiddenPaths = [
+      "memory/Channel/launch/MEMORY.md",
+      "memory/Channel/launch/Thread/other/MEMORY.md",
+      ...Array.from({ length: 210 }, (_, index) => `memory/Channel/foreign-${index}/MEMORY.md`),
+    ];
+    const visiblePaths = [`${threadPath}/MEMORY.md`, `${threadPath}/Fragment/2026-10-26.md`];
+    for (const [paths, content] of [
+      [hiddenPaths, "alpha alpha alpha excluded discussion"],
+      [visiblePaths, "alpha beta current Thread discussion"],
+    ] as const) {
+      for (const relativePath of paths) {
+        const filePath = path.join(fixture.paths.workspace, relativePath);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, `${content}: ${relativePath}`);
+      }
+    }
+    await indexedManager(cfg);
+    const query = { query: "alpha", corpus: "memory", maxResults: 2 };
+    const unscoped = await searchTool(cfg).execute("unscoped-control", query);
+    const control = (unscoped.details as { results: Array<{ path: string; ref: string }> }).results;
+    expect(control).toHaveLength(2);
+    expect(control.every((hit) => hiddenPaths.includes(hit.path))).toBe(true);
+    const options: Parameters<typeof createMemoryReadTool>[0] = {
+      memoryAudience: {
+        kind: "conversation",
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:current",
+        sessionId: "00000000-0000-4000-8000-000000000001",
+        context: {
+          participantCoverage: "partial",
+          artifacts: [
+            {
+              layer: "workspace",
+              scope: { kind: "workspace" },
+              relativePath: "memory/MEMORY.md",
+            },
+            {
+              layer: "thread",
+              scope: { kind: "thread", channelId: "launch", threadId: "current" },
+              relativePath: `${threadPath}/MEMORY.md`,
+            },
+          ],
+        },
+      },
+      assertMemoryAudienceCurrent: () => {},
+    };
+    const tool = searchTool(cfg, options);
+    const result = await tool.execute("scoped-backfill", query);
+    expect(result.details).toMatchObject({
+      results: expect.arrayContaining(
+        visiblePaths.map((relativePath) => expect.objectContaining({ path: relativePath })),
+      ),
+      debug: { hits: 2 },
+    });
+    expect(result.details).toHaveProperty("results.length", 2);
+    const read = createMemoryReadTool({ config: cfg, ...options })!;
+    const visible = (result.details as { results: Array<{ path: string; ref: string }> })
+      .results[0]!;
+    await expect(read.execute("scoped-reference", { ref: visible.ref })).resolves.toMatchObject({
+      details: { status: "ok", text: expect.stringContaining("current Thread discussion") },
+    });
+    await expect(
+      read.execute("foreign-reference", { ref: control[0]!.ref }),
+    ).resolves.toMatchObject({
+      details: { status: "not_found", text: "" },
+    });
+    const siblingRef =
+      "memory:v1:" +
+      Buffer.from(JSON.stringify(["main", hiddenPaths[1], 1, 1])).toString("base64url");
+    await expect(
+      read.execute("tampered-sibling-reference", { ref: siblingRef }),
+    ).resolves.toMatchObject({
+      details: { status: "not_found", text: "" },
+    });
+    expect(provider.embedQueryCalls).toBe(2);
+    expect(provider.embeddedQueryTexts).toEqual(["alpha", "alpha"]);
   });
 
   it("backfills visible sessions with one bounded query embedding", async () => {

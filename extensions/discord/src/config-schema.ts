@@ -74,6 +74,8 @@ const DiscordThreadSchema = z
 
 const DiscordGuildChannelSchema = buildGroupEntrySchema(
   {
+    members: z.array(DiscordSnowflakeStringSchema).min(1).optional(),
+    threadMode: z.enum(["never", "auto", "always"]).optional(),
     requireMentionInBotThreads: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     users: DiscordIdListSchema.optional(),

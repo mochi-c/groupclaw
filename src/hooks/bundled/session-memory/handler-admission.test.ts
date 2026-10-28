@@ -88,8 +88,8 @@ describe("session-memory gateway admission", () => {
         });
         await flushSessionMemoryWritesForTest();
 
-        await expect(fs.readdir(path.join(tempDir, "memory"))).resolves.toEqual([
-          expect.stringMatching(/-admitted-slug\.md$/),
+        await expect(fs.readdir(path.join(tempDir, "memory", "Event"))).resolves.toEqual([
+          expect.stringMatching(/-admitted-slug_[0-9]+\.md$/),
         ]);
       },
     );

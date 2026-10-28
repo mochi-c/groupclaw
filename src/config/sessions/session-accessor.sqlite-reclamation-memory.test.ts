@@ -98,9 +98,9 @@ describe("reclamation with the public memory runtime", () => {
     resetStandaloneMemoryRegistrySlot();
     const root = await fs.realpath(tempDirs.make("openclaw-reclamation-memory-"));
     workspace = path.join(root, "workspace");
-    await fs.mkdir(workspace);
+    await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
     await fs.writeFile(
-      path.join(workspace, "MEMORY.md"),
+      path.join(workspace, "memory", "MEMORY.md"),
       "A retained memory independent of the deleted session.",
     );
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));

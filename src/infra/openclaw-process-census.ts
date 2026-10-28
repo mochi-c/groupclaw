@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
@@ -12,6 +13,7 @@ import { escapeRegExp } from "../shared/regexp.js";
 import { isRosettaTranslatedProcess } from "../shared/rosetta-translation.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import { isContainerEnvironment } from "./container-environment.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   classifyOpenClawArgv,
   classifyOpenClawEntrypointPath,
@@ -111,7 +113,11 @@ function classifyProcessArtifactCustody(
   }
 }
 
-type HandoffReferences = { runId: string; artifactPaths: readonly string[] };
+type HandoffReferences = {
+  runId: string;
+  artifactPaths: readonly string[];
+  custody?: "all-processes";
+};
 type CensusResult = { matchingPids: number[]; unverifiedPids: number[]; error?: string };
 type CensusProcess = { pid: number; state: string; command?: { ppid: number } & ProcessCommand };
 
@@ -210,14 +216,15 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         pathToFileURL(value, { windows }).href,
       ]) ?? [];
     const literal = (value: string) => escapeRegExp(normalize(value));
+    const runPattern = handoff?.runId ? `${literal(handoff.runId)}(?=$|[^\\w-])` : "(?!)";
     const matches = new RegExp(
-      `(?:^|[^\\w-])(?:${literal(handoff?.runId ?? "")}(?=$|[^\\w-])|(?:${paths.map(literal).join("|") || "(?!)"})(?=$|[/\\s"'\x60);,\\]]))`,
+      `(?:^|[^\\w-])(?:${runPattern}|(?:${paths.map(literal).join("|") || "(?!)"})(?=$|[/\\s"'\x60);,\\]]))`,
     );
     for (const { pid, state, command } of processes) {
       if (handoff && Date.now() >= deadline) {
         throw new Error("Process census deadline exceeded");
       }
-      if (pid === process.pid || launchers.has(pid)) {
+      if (!handoff?.custody && (pid === process.pid || launchers.has(pid))) {
         continue;
       }
       if ((state?.startsWith("Z") || handoff) && isPidDefinitelyDead(pid)) {
@@ -231,6 +238,35 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         const observation = nativeByPid.get(pid);
         const cwd = directories.get(pid);
         const texts = [...(argv ?? []), observation?.commandLine ?? "", cwd ?? ""];
+        let unresolvedPath = false;
+        if (handoff.custody) {
+          const { operands } = resolveRuntimeScriptPosition(argv ?? []);
+          for (const value of [
+            cwd,
+            ...operands.map((operand) => operand.value),
+            ...(argv ?? []).map((argument) => argument.slice(argument.indexOf("=") + 1)),
+          ]) {
+            if (!value) {
+              continue;
+            }
+            try {
+              const file = value.startsWith("file:")
+                ? fileURLToPath(value)
+                : path.isAbsolute(value)
+                  ? value
+                  : cwd
+                    ? path.resolve(cwd, value)
+                    : undefined;
+              if (file) {
+                texts.push(fs.realpathSync(file));
+              }
+            } catch (error) {
+              if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+                unresolvedPath = true;
+              }
+            }
+          }
+        }
         if (texts.some((value) => matches.test(normalize(value)))) {
           result.matchingPids.push(pid);
           continue;
@@ -240,7 +276,7 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
           (command?.uid !== undefined &&
             process.getuid?.() !== undefined &&
             command.uid !== process.getuid?.());
-        if ((!argv || cwd === undefined) && !foreign) {
+        if (unresolvedPath || ((!argv || cwd === undefined) && (handoff.custody || !foreign))) {
           result.unverifiedPids.push(pid);
           if (windows) {
             result.error = "Retry update repair as Administrator using the same Windows account.";

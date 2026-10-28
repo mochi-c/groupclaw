@@ -9,8 +9,8 @@ export {
   tryResolveRawLegacyDefaultAgentId,
 } from "../../../../src/agents/agent-roster.js";
 export {
-  resolveCanonicalRootMemoryFile,
-  shouldSkipRootMemoryAuxiliaryPath,
+  resolveCanonicalWorkspaceMemoryFile,
+  shouldSkipWorkspaceMemoryAuxiliaryPath,
 } from "../../../../src/memory/root-memory-files.js";
 export { resolveUserPath };
 

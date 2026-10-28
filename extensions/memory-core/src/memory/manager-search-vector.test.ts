@@ -40,6 +40,7 @@ function searchVectorFixture(db: DatabaseSync, options: Partial<VectorSearchOpti
         providerModel: request.providerModel,
         providerModelAliases: request.providerModelAliases,
         sourceFilter: sourceFilterChunks,
+        memoryPathFilter: request.memoryPathFilter,
         queryVec: request.queryVec,
         limit: request.limit,
         snippetMaxChars: request.snippetMaxChars,
@@ -559,99 +560,110 @@ describe("searchVector sqlite-vec KNN", () => {
     },
   );
 
-  it("falls back when filters hide matches beyond sqlite-vec's KNN cap", async () => {
-    const db = new DatabaseSync(":memory:", { allowExtension: true });
-    try {
-      const loaded = await loadSqliteVecExtension({ db });
-      expect(loaded.ok, loaded.error).toBe(true);
-      ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: false,
-      });
-      db.exec(`
+  it.each(["provider models", "memory paths"])(
+    "falls back when %s hide matches beyond sqlite-vec's KNN cap",
+    async (filterKind) => {
+      const db = new DatabaseSync(":memory:", { allowExtension: true });
+      try {
+        const loaded = await loadSqliteVecExtension({ db });
+        expect(loaded.ok, loaded.error).toBe(true);
+        ensureMemoryIndexSchema({
+          db,
+          cacheEnabled: false,
+          ftsEnabled: false,
+        });
+        db.exec(`
         CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
           id TEXT PRIMARY KEY,
           embedding FLOAT[2]
         );
       `);
 
-      const insertVector = db.prepare(
-        "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
-      );
-      const addChunk = (params: {
-        id: string;
-        model: string;
-        source: "memory" | "sessions";
-        vector: [number, number];
-      }) => {
-        insertFallbackChunk(db, params);
-        insertVector.run(params.id, vectorToBlob(params.vector));
-      };
+        const insertVector = db.prepare(
+          "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
+        );
+        const addChunk = (params: {
+          id: string;
+          model: string;
+          source: "memory" | "sessions";
+          vector: [number, number];
+        }) => {
+          insertFallbackChunk(db, params);
+          insertVector.run(params.id, vectorToBlob(params.vector));
+        };
 
-      for (let i = 0; i < 20; i += 1) {
+        for (let i = 0; i < 20; i += 1) {
+          addChunk({
+            id: `other-${i}`,
+            model: "other-model",
+            source: "memory",
+            vector: [1, 0],
+          });
+        }
         addChunk({
-          id: `other-${i}`,
-          model: "other-model",
+          id: "target",
+          model: "target-model",
           source: "memory",
-          vector: [1, 0],
+          vector: [0.5, 0.5],
         });
-      }
-      addChunk({
-        id: "target",
-        model: "target-model",
-        source: "memory",
-        vector: [0.5, 0.5],
-      });
-      addChunk({
-        id: "alias",
-        model: "alias-model",
-        source: "memory",
-        vector: [0.4, 0.6],
-      });
-
-      const belowCapResults = await searchVectorFixture(db, {
-        providerModelAliases: ["alias-model"],
-        limit: 2,
-        ensureVectorReady: async () => true,
-      });
-      expect(belowCapResults.map((row) => row.id)).toEqual(["target", "alias"]);
-
-      db.exec("BEGIN");
-      for (let i = 20; i < 4097; i += 1) {
         addChunk({
-          id: `other-${i}`,
-          model: "other-model",
+          id: "alias",
+          model: "alias-model",
           source: "memory",
-          vector: [1, 0],
+          vector: [0.4, 0.6],
         });
+        db.prepare("UPDATE memory_index_chunks SET path = ? WHERE id = ?").run(
+          "memory/allowed/alias.md",
+          "alias",
+        );
+
+        const belowCapResults = await searchVectorFixture(db, {
+          providerModelAliases: ["alias-model"],
+          limit: 2,
+          ensureVectorReady: async () => true,
+        });
+        expect(belowCapResults.map((row) => row.id)).toEqual(["target", "alias"]);
+
+        db.exec("BEGIN");
+        for (let i = 20; i < 4097; i += 1) {
+          addChunk({
+            id: `other-${i}`,
+            model: filterKind === "memory paths" ? "target-model" : "other-model",
+            source: "memory",
+            vector: [1, 0],
+          });
+        }
+        addChunk({
+          id: "wrong-source",
+          model: "target-model",
+          source: "sessions",
+          vector: [0.6, 0.4],
+        });
+        db.exec("COMMIT");
+
+        const overLimitQuery = db.prepare(
+          "SELECT id FROM memory_index_chunks_vec WHERE embedding MATCH ? AND k = ?",
+        );
+        expect(() => overLimitQuery.all(vectorToBlob([1, 0]), 4097)).toThrow(
+          "k value in knn query too large, provided 4097 and the limit is 4096",
+        );
+
+        const results = await searchVectorFixture(db, {
+          providerModelAliases: ["alias-model"],
+          limit: 2,
+          ensureVectorReady: async () => true,
+          sourceFilterVec: { sql: " AND c.source IN (?)", params: ["memory"] },
+          sourceFilterChunks: { sql: " AND source IN (?)", params: ["memory"] },
+          memoryPathFilter:
+            filterKind === "memory paths"
+              ? { exactPaths: ["memory/target.md"], directoryPrefixes: ["memory/allowed/"] }
+              : undefined,
+        });
+
+        expect(results.map((row) => row.id)).toEqual(["target", "alias"]);
+      } finally {
+        db.close();
       }
-      addChunk({
-        id: "wrong-source",
-        model: "target-model",
-        source: "sessions",
-        vector: [0.6, 0.4],
-      });
-      db.exec("COMMIT");
-
-      const overLimitQuery = db.prepare(
-        "SELECT id FROM memory_index_chunks_vec WHERE embedding MATCH ? AND k = ?",
-      );
-      expect(() => overLimitQuery.all(vectorToBlob([1, 0]), 4097)).toThrow(
-        "k value in knn query too large, provided 4097 and the limit is 4096",
-      );
-
-      const results = await searchVectorFixture(db, {
-        providerModelAliases: ["alias-model"],
-        limit: 2,
-        ensureVectorReady: async () => true,
-        sourceFilterVec: { sql: " AND c.source IN (?)", params: ["memory"] },
-        sourceFilterChunks: { sql: " AND source IN (?)", params: ["memory"] },
-      });
-
-      expect(results.map((row) => row.id)).toEqual(["target", "alias"]);
-    } finally {
-      db.close();
-    }
-  });
+    },
+  );
 });

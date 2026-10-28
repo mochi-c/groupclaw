@@ -37,7 +37,7 @@ describe("memory forget", () => {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-forget-")),
     );
     workspaceDir = path.join(stateDir, "workspace");
-    await fs.mkdir(workspaceDir);
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     await configureMemoryCoreDreamingStateForTests();
     cfg = {
@@ -95,7 +95,7 @@ describe("memory forget", () => {
       const priorEntry = "- The launch code is violet.";
       const snippet =
         action === "merged" ? "The launch code is violet." : "The launch code is cobalt.";
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
       const diaryPath = path.join(workspaceDir, "DREAMS.md");
       await fs.writeFile(diaryPath, "# Dream Diary\nKeep this unrelated diary entry.\n");
       const previousMemory = [
@@ -484,7 +484,7 @@ describe("memory forget", () => {
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, sourcePath), `${snippet}\n`);
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory", "MEMORY.md"),
       [
         "# Long-Term Memory",
         "Curated operator fact.",
@@ -537,7 +537,10 @@ describe("memory forget", () => {
     });
     expect(promoted.appended).toBe(1);
     expect(promoted.compactedDates).toEqual(["2026-08-24"]);
-    const promotedMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const promotedMemory = await fs.readFile(
+      path.join(workspaceDir, "memory", "MEMORY.md"),
+      "utf8",
+    );
     expect(promotedMemory).toContain(`<!-- openclaw-memory-promotion:${candidateKey} -->`);
     expect(promotedMemory).toContain(snippet);
 
@@ -551,7 +554,10 @@ describe("memory forget", () => {
       entryKeys: [candidateKey],
       artifacts: { memoryFiles: 1, memoryEntries: 1, shortTermEntries: 1, originRows: 1 },
     });
-    const survivingMemory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const survivingMemory = await fs.readFile(
+      path.join(workspaceDir, "memory", "MEMORY.md"),
+      "utf8",
+    );
     expect(survivingMemory).toContain("Curated operator fact.");
     expect(survivingMemory).not.toContain(snippet);
     expect(survivingMemory).not.toContain(candidateKey);

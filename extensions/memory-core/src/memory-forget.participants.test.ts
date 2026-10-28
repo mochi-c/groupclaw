@@ -53,7 +53,7 @@ describe("memory forget participant selectors", () => {
       .prepare("SELECT * FROM session_participants ORDER BY session_key")
       .all();
     const memory = "# Memory\nKeep this fixture.\n";
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memory);
+    await fs.writeFile(path.join(workspaceDir, "memory", "MEMORY.md"), memory);
     const report = await forgetMemoryEntries({
       cfg,
       agentId: "main",
@@ -76,7 +76,7 @@ describe("memory forget participant selectors", () => {
       database.prepare("SELECT * FROM session_participants ORDER BY session_key").all(),
     ).toEqual(before);
     expect(await listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memory);
+    expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8")).toBe(memory);
   });
 
   it("does not infer hook or participant facts for an archived-only session", async () => {

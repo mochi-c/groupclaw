@@ -74,7 +74,7 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     await fs.mkdir(state.path("linked-source"));
     await fs.writeFile(state.path("linked-source", "note.md"), "Excluded symbolic source.");
     await fs.symlink(state.path("linked-source"), path.join(memory, "linked"), "junction");
-    await fs.writeFile(path.join(state.workspaceDir, "MEMORY.md"), "Evergreen sentinel.");
+    await fs.writeFile(path.join(memory, "MEMORY.md"), "Evergreen sentinel.");
     await fs.writeFile(path.join(state.workspaceDir, "USER.md"), "User sentinel.");
     await fs.writeFile(note, "Amethyst sentinel.");
     const cfg: OpenClawConfig = {
@@ -111,10 +111,15 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     const rows = index.prepare(
       `SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE} ORDER BY path, start_line`,
     );
-    const expected = (files: Array<{ path: string; text: string }>) => [
-      { path: "MEMORY.md", text: "Evergreen sentinel." },
+    const expected = (
+      files: Array<{ path: string; text: string }>,
+      options: { root?: boolean } = {},
+    ) => [
       { path: "USER.md", text: "User sentinel." },
       { path: "imports/keep.md", text: "Imported sentinel." },
+      ...(options.root === false
+        ? []
+        : [{ path: "memory/MEMORY.md", text: "Evergreen sentinel." }]),
       ...files,
     ];
     expect(rows.all()).toEqual(expected([{ path: "memory/note.md", text: "Amethyst sentinel." }]));
@@ -131,7 +136,10 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
         throw error;
       }
     });
-    const flush = async (files: Array<{ path: string; text: string }>) => {
+    const flush = async (
+      files: Array<{ path: string; text: string }>,
+      options: { root?: boolean } = {},
+    ) => {
       indexed = createDeferred<void>();
       await Promise.all(
         subscriptions
@@ -141,7 +149,7 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
       await vi.advanceTimersByTimeAsync(debounceMs);
       await indexed.promise;
       // Read published rows directly: search could repair a broken watcher itself.
-      expect(rows.all()).toEqual(expected(files));
+      expect(rows.all()).toEqual(expected(files, options));
     };
     // Join the actual bootstrap invalidation; an unchanged reconcile emits no callback.
     await bootstrap.promise;
@@ -155,7 +163,9 @@ it("indexes real edits, deletion and root replacement, then joins every subscrip
     await fs.rename(memory, state.path("previous-memory"));
     await fs.mkdir(memory);
     await fs.writeFile(path.join(memory, "replacement.md"), "Heliotrope replacement.");
-    await flush([{ path: "memory/replacement.md", text: "Heliotrope replacement." }]);
+    await flush([{ path: "memory/replacement.md", text: "Heliotrope replacement." }], {
+      root: false,
+    });
     expect(visited.has(path.join(imports, "keep.md"))).toBe(true);
     expect(visited.has(note)).toBe(true);
     expect([...visited].some((file) => file.startsWith(unrelated + path.sep))).toBe(false);

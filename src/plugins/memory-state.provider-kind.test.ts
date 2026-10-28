@@ -5,6 +5,7 @@ import {
   getMemoryProviderRuntime,
   resolveLoadedMemoryProviderKind,
   setStandaloneMemoryOwner,
+  usesLoadedMemoryAudience,
 } from "./memory-state.js";
 import type { MemoryPluginCapability } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -44,6 +45,7 @@ it("finds the configured native slot owner in the process registry from a cold r
   // The run's own registry has no memory owner, so a registry-only check misses it.
   expect(inColdRun(() => getMemoryProviderRuntime())).toBeUndefined();
   expect(inColdRun(() => resolveLoadedMemoryProviderKind(knowledgeSlot))).toBe("native");
+  expect(inColdRun(() => usesLoadedMemoryAudience(knowledgeSlot))).toBe(true);
   // A process owner answers only for the slot the config selects.
   expect(
     inColdRun(() => resolveLoadedMemoryProviderKind({ plugins: { slots: { memory: "other" } } })),
@@ -58,14 +60,41 @@ it("finds a native slot owner that an earlier standalone lookup loaded", () => {
 
 it("classifies loaded legacy owners as legacy and reports nothing when no owner is loaded", () => {
   expect(inColdRun(() => resolveLoadedMemoryProviderKind(knowledgeSlot))).toBeUndefined();
+  expect(inColdRun(() => usesLoadedMemoryAudience(knowledgeSlot))).toBe(false);
 
   setStandaloneMemoryOwner({ pluginId: "knowledge", native: false });
   expect(inColdRun(() => resolveLoadedMemoryProviderKind(knowledgeSlot))).toBe("legacy");
+  expect(inColdRun(() => usesLoadedMemoryAudience(knowledgeSlot))).toBe(false);
 
   setStandaloneMemoryOwner(undefined);
   setActivePluginRegistry(registryWith("knowledge", legacyCapability));
   expect(inColdRun(() => resolveLoadedMemoryProviderKind(knowledgeSlot))).toBe("legacy");
+  expect(inColdRun(() => usesLoadedMemoryAudience(knowledgeSlot))).toBe(false);
 });
+
+it.each(["process", "standalone"])(
+  "preserves file-runtime audience opt-in from a %s owner in a cold run",
+  (source) => {
+    if (source === "process") {
+      setActivePluginRegistry(
+        registryWith("knowledge", {
+          runtime: { ...legacyCapability.runtime!, supportsMemoryAudience: true },
+        }),
+      );
+    } else {
+      setStandaloneMemoryOwner({
+        pluginId: "knowledge",
+        native: false,
+        supportsMemoryAudience: true,
+      });
+    }
+    expect(inColdRun(() => resolveLoadedMemoryProviderKind(knowledgeSlot))).toBe("legacy");
+    expect(inColdRun(() => usesLoadedMemoryAudience(knowledgeSlot))).toBe(true);
+    expect(
+      inColdRun(() => usesLoadedMemoryAudience({ plugins: { slots: { memory: "other" } } })),
+    ).toBe(false);
+  },
+);
 
 it("prefers the current registry's owner over process and standalone facts", () => {
   setStandaloneMemoryOwner({ pluginId: "knowledge", native: false });

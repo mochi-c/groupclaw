@@ -80,6 +80,27 @@ describe("closeDiscordThreadSessions", () => {
     expect(store[noMatchKey].updatedAt).toBe(9_999);
   });
 
+  it("closes only the Discord Thread when other conversations contain the same id", async () => {
+    const parentThreadKey = `agent:main:discord:channel:100:thread:${THREAD_ID}`;
+    const store = {
+      [parentThreadKey]: { sessionId: "thread", updatedAt: 1 },
+      [`agent:main:telegram:group:${THREAD_ID}`]: { sessionId: "telegram", updatedAt: 1 },
+      [`agent:main:discord:direct:${THREAD_ID}`]: { sessionId: "direct", updatedAt: 1 },
+      [`agent:main:discord:channel:100:thread:123:member:${THREAD_ID}`]: {
+        sessionId: "other-thread",
+        updatedAt: 1,
+      },
+    };
+    setupStore(store);
+    expect(await closeDiscordThreadSessions({ cfg: {}, threadId: THREAD_ID })).toBe(1);
+    expect(store[parentThreadKey]).toBeUndefined();
+    expect(Object.values(store).map(({ sessionId }) => sessionId)).toEqual([
+      "telegram",
+      "direct",
+      "other-thread",
+    ]);
+  });
+
   it("returns 0 immediately when threadId is empty without touching the store", async () => {
     const count = await closeDiscordThreadSessions({
       cfg: {},

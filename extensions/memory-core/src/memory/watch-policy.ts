@@ -69,8 +69,10 @@ export class MemoryWatchPolicy {
     private readonly settings: Settings,
   ) {
     this.extras = normalizeExtraMemoryPathEntries(workspace, settings.extraPaths);
+    // MEMORY.md lives inside the observed `memory` tree after the workspace
+    // memory migration; a separate entry target would double-select it. USER.md
+    // stays a workspace-root entry, so it still needs its own target.
     this.targets = [
-      { path: path.resolve(workspace, "MEMORY.md"), kind: "entry", core: true },
       { path: path.resolve(workspace, "USER.md"), kind: "entry", core: true },
       { path: path.resolve(workspace, "memory"), kind: "tree", core: true },
       // A tree scope also selects an extra path that is a regular file. Missing

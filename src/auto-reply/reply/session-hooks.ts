@@ -3,7 +3,15 @@ import {
   createSessionResetBoundaryId,
   type SessionResetBoundaryRequest,
 } from "../../config/sessions/session-reset-boundary-event.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  forgetActiveSessionForShutdown,
+  noteActiveSessionForShutdown,
+} from "../../gateway/active-sessions-shutdown-tracker.js";
 import { createResetBoundaryTranscriptSource } from "../../gateway/session-end-transcript-reader.js";
+import { captureMemorySourceSession } from "../../memory/session-memory-context.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookSessionEndEvent,
   PluginHookSessionEndReason,
@@ -79,7 +87,7 @@ export function buildSessionStartHookPayload(
   };
 }
 
-export function emitReplySessionStartHook(
+function emitReplySessionStartHook(
   hookRunner: HookRunner,
   params: Parameters<typeof buildSessionStartHookPayload>[0],
 ): void {
@@ -100,6 +108,7 @@ export function buildSessionEndHookPayload(
     transcriptArchived?: boolean;
     nextSessionId?: string;
     nextSessionKey?: string;
+    sessionEntry?: SessionEntry;
     endedTranscript?: SessionEndTranscriptSource;
   },
 ): {
@@ -107,10 +116,14 @@ export function buildSessionEndHookPayload(
   context: SessionHookContext;
 } {
   const context = buildSessionHookContext(params);
-  attachSessionEndTranscriptSource(
-    context,
-    params.endedTranscript ?? { available: false, reason: "unsupported-source" },
-  );
+  const session =
+    params.sessionEntry?.sessionId === params.sessionId
+      ? captureMemorySourceSession(params.sessionEntry)
+      : undefined;
+  attachSessionEndTranscriptSource(context, {
+    ...(params.endedTranscript ?? { available: false, reason: "unsupported-source" }),
+    ...(session ? { session } : {}),
+  });
   return {
     event: {
       sessionId: params.sessionId,
@@ -127,7 +140,7 @@ export function buildSessionEndHookPayload(
   };
 }
 
-export function emitReplySessionEndHook(params: {
+function emitReplySessionEndHook(params: {
   hookRunner: HookRunner;
   sessionId: string;
   sessionKey: string;
@@ -136,6 +149,7 @@ export function emitReplySessionEndHook(params: {
   reason?: PluginHookSessionEndReason;
   nextSessionId?: string;
   resetBoundaryId?: string;
+  sessionEntry?: SessionEntry;
 }): void {
   const endedTranscript = params.resetBoundaryId
     ? createResetBoundaryTranscriptSource(
@@ -152,4 +166,60 @@ export function emitReplySessionEndHook(params: {
   void runWithGatewayDetachedWorkContinuation(async () => {
     await params.hookRunner.runSessionEnd(payload.event, payload.context);
   }, "hooks:session-end").catch(() => {});
+}
+
+export function emitReplySessionLifecycleHooks(
+  params: SessionHookContext & {
+    cfg: OpenClawConfig;
+    storePath: string;
+    isFirstSessionTurn: boolean;
+    previousSessionEntry?: SessionEntry;
+    previousSessionEndReason?: PluginHookSessionEndReason;
+    resetBoundaryId?: string;
+  },
+): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner || !params.isFirstSessionTurn) {
+    return;
+  }
+  const { agentId, cfg, sessionId, sessionKey, storePath, previousSessionEntry } = params;
+  if (previousSessionEntry?.sessionId) {
+    // The shutdown finalizer must not re-fire session_end for a session
+    // that is being replaced here; forget unconditionally so the next drain
+    // skips this id even when no session_end plugin is currently attached.
+    forgetActiveSessionForShutdown(previousSessionEntry.sessionId);
+    if (hookRunner.hasHooks("session_end")) {
+      emitReplySessionEndHook({
+        hookRunner,
+        sessionId: previousSessionEntry.sessionId,
+        sessionEntry: previousSessionEntry,
+        sessionKey,
+        agentId,
+        storePath,
+        reason: params.previousSessionEndReason,
+        nextSessionId: sessionId,
+        resetBoundaryId: params.resetBoundaryId,
+      });
+    }
+  }
+  if (sessionId) {
+    // Track the new session so the shutdown finalizer fires a typed
+    // session_end if the Gateway stops while this session is still active.
+    noteActiveSessionForShutdown({
+      cfg,
+      sessionKey,
+      sessionId,
+      storePath,
+      sessionFile: sessionKey,
+      agentId,
+    });
+  }
+  if (hookRunner.hasHooks("session_start")) {
+    emitReplySessionStartHook(hookRunner, {
+      sessionId,
+      sessionKey,
+      agentId,
+      resumedFrom: previousSessionEntry?.sessionId,
+    });
+  }
 }

@@ -615,15 +615,15 @@ describe("memory consolidation", () => {
     });
 
     expect(applied.applied).toBe(1);
-    await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toContain(
-      "## Promoted From Short-Term Memory",
-    );
+    await expect(
+      fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8"),
+    ).resolves.toContain("## Promoted From Short-Term Memory");
   });
 
   it("uses append fallback when MEMORY.md changes during the subagent turn", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-race-");
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
@@ -666,7 +666,7 @@ describe("memory consolidation", () => {
   it("uses append fallback when a foreground edit adds the planned result entry", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-relevant-race-");
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
@@ -708,7 +708,7 @@ describe("memory consolidation", () => {
   it("uses append fallback when MEMORY.md changes while the preimage is stored", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-preimage-race-");
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
@@ -772,7 +772,7 @@ describe("memory consolidation", () => {
   it("does not reconsolidate a candidate protected by a promotion marker", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-idempotent-");
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     const candidates = await recordConsolidationRecall(workspaceDir);
@@ -804,7 +804,7 @@ describe("memory consolidation", () => {
   it("reports a candidate removed from the recall store before consolidation as changed", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-removed-recall-");
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
@@ -845,7 +845,7 @@ describe("memory consolidation", () => {
   it("rejects a candidate downgraded in the recall store during consolidation", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-provenance-race-");
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
@@ -921,7 +921,7 @@ describe("memory consolidation", () => {
   it("rejects a candidate whose ranking signals change during consolidation", async () => {
     const workspaceDir = await createTempWorkspace("memory-consolidation-ranking-race-");
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");

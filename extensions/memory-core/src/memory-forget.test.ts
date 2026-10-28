@@ -229,7 +229,7 @@ describe("memory forget", () => {
       ],
     });
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory", "MEMORY.md"),
       "# Long-Term Memory\n<!-- openclaw-memory-promotion:archived-entry -->\n- Archived secret.\n",
     );
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\nKeep curated profile.\n");
@@ -290,7 +290,7 @@ describe("memory forget", () => {
 
     const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [selector] });
     expect(report).toEqual({ ...preview, dryRun: false });
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).not.toContain(
+    expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8")).not.toContain(
       "Archived secret",
     );
     expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toContain(
@@ -317,7 +317,7 @@ describe("memory forget", () => {
         },
       ],
     });
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     const originalContent =
       "# Long-Term Memory\n" +
       "Curated operator fact that must survive.\n" +
@@ -371,7 +371,7 @@ describe("memory forget", () => {
 
   it("durably tombstones an unresolved explicit session without changing mixed-newline artifacts", async () => {
     const content = "# Long-Term Memory\r\nKeep this.\n";
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
     await fs.writeFile(memoryPath, content);
     const backup = {
       key: "unrelated-backup",
@@ -450,7 +450,7 @@ describe("memory forget", () => {
   ])(
     "preserves surviving line endings when purging $label corpus, memory, and backups",
     async ({ targetEnding, survivorEnding }) => {
-      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const memoryPath = path.join(workspaceDir, "memory", "MEMORY.md");
       const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
       const corpusPath = path.join(corpusDir, "2026-08-26.txt");
       const quotation = "User: Remove this selected private fact.";
@@ -588,7 +588,7 @@ describe("memory forget", () => {
     db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
     const memoryContent =
       "# Long-Term Memory\n<!-- openclaw-memory-promotion:legacy-entry -->\n- Keep old memory.\n";
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memoryContent);
+    await fs.writeFile(path.join(workspaceDir, "memory", "MEMORY.md"), memoryContent);
     const revision = (
       db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
         revision: number;
@@ -604,7 +604,9 @@ describe("memory forget", () => {
 
     expect(report.entryKeys).toEqual([]);
     expect(report.untargetableEntryKeys).toEqual(["legacy-entry"]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8")).toBe(
+      memoryContent,
+    );
     expect(
       db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -625,7 +627,9 @@ describe("memory forget", () => {
 
     const deleted = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
     expect(deleted.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8")).toBe(
+      memoryContent,
+    );
     expect(await listMemorySessionTombstones({ agentId: "main" })).toMatchObject([
       { agentId: "main", sessionId: "target", reason: "forgotten" },
     ]);

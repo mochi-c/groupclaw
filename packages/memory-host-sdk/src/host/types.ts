@@ -397,6 +397,16 @@ export interface MemorySearchManager {
        */
       onPartialResults?: (results: MemorySearchResult[] | null) => void;
       sources?: MemorySource[];
+      /**
+       * Narrow memory-file retrieval before candidate limits. Paths and directory
+       * prefixes are workspace-relative and case-sensitive; other sources are
+       * unchanged. This filter grants no access: callers still authorize results.
+       */
+      memoryPathFilter?: {
+        exactPaths: readonly string[];
+        directoryPrefixes: readonly string[];
+        includeOutsideMemory?: boolean;
+      };
       /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
       signal?: AbortSignal;
     } & MemorySearchDeadlineControlOptions,

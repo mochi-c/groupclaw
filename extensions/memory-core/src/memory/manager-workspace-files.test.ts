@@ -345,7 +345,9 @@ describe("Gateway index over Harness workspace files", () => {
     }
   });
   it("keeps local Memory with a stopped document-only bridge", async () => {
-    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), "alpha local Memory.");
+    const memoryPath = path.join(fixture.paths.workspace, "memory", "MEMORY.md");
+    await fs.mkdir(path.dirname(memoryPath), { recursive: true });
+    await fs.writeFile(memoryPath, "alpha local Memory.");
     release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
       bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
     });
@@ -354,19 +356,14 @@ describe("Gateway index over Harness workspace files", () => {
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "document-only", force: true });
     expect((await manager.search("alpha", { minScore: 0 }))[0]?.snippet).toContain("local Memory");
-    expect((await manager.readFile({ relPath: "MEMORY.md" })).text).toContain("local Memory");
-    expect(
-      (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "MEMORY.md" })).text,
-    ).toContain("local Memory");
-    expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
+    expect((await manager.readFile({ relPath: "memory/MEMORY.md" })).text).toContain(
+      "local Memory",
     );
     expect(
-      await readWorkspaceText(
-        fixture.paths.workspace,
-        path.join(fixture.paths.workspace, "MEMORY.md"),
-      ),
+      (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "memory/MEMORY.md" })).text,
     ).toContain("local Memory");
+    expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(memoryPath);
+    expect(await readWorkspaceText(fixture.paths.workspace, memoryPath)).toContain("local Memory");
   });
 
   it("ranks remote extra paths by indexed host mtime despite absent or stale Gateway files", async () => {

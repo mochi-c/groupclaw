@@ -84,6 +84,7 @@ export async function buildAgentsApiInstructions(
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     bootstrapUserProfileId: params.bootstrapUserProfileId,
+    memoryAudience: params.memoryAudience,
     agentId: params.agentId,
     chatType: params.chatType,
     contextMode: params.bootstrapContextMode,

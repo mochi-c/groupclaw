@@ -62,6 +62,7 @@ export async function prepareCodexWorkspaceDeveloperInstructions(params: {
   }
   const files = await resolveBootstrapFilesForPreparation(params);
   const contextFiles = buildBootstrapContextForFiles(files, {
+    workspaceDir: params.workspaceDir,
     config: params.config,
     agentId: params.agentId,
   });
@@ -114,6 +115,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
       bootstrapUserProfileId: params.params.bootstrapUserProfileId,
+      memoryAudience: params.params.memoryAudience,
       chatType: params.params.chatType,
       agentId: params.params.agentId ?? params.sessionAgentId,
       warn: (message) => embeddedAgentLog.warn(message),

@@ -123,8 +123,8 @@ export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId:
   );
 }
 
-/** Root memory filename used in agent workspaces. */
-export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
+/** Workspace-global memory path relative to the agent workspace. */
+export const MEMORY_HOST_WORKSPACE_RELATIVE_PATH = "memory/MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
 

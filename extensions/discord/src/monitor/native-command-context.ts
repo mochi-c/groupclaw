@@ -4,12 +4,16 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
-import type {
-  AutocompleteInteraction,
-  ButtonInteraction,
-  CommandInteraction,
-  StringSelectMenuInteraction,
+import {
+  resolveDiscordConversationIdentity,
+  resolveDiscordConversationLink,
+} from "../conversation-identity.js";
+import {
+  ChannelType,
+  type AutocompleteInteraction,
+  type ButtonInteraction,
+  type CommandInteraction,
+  type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import { getDiscordRuntime } from "../runtime.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
@@ -43,6 +47,7 @@ type BuildDiscordNativeCommandContextParams = {
   isGroupDm: boolean;
   isGuild: boolean;
   isThreadChannel: boolean;
+  channelType?: ChannelType;
   user: {
     id: string;
     username: string;
@@ -140,6 +145,11 @@ export async function buildDiscordNativeCommandContext(
         conversationId: params.channelId,
       }),
       label: conversationLabel,
+      link: resolveDiscordConversationLink({
+        channelId: params.channelId,
+        guildId: params.isGuild ? (params.guildId ?? params.guildInfo?.id) : "@me",
+        isThread: params.isThreadChannel,
+      }),
       spaceId: params.isGuild
         ? (params.guildInfo?.id ?? params.guildInfo?.slug ?? params.guildId)
         : undefined,
@@ -173,6 +183,14 @@ export async function buildDiscordNativeCommandContext(
     },
     supplemental: { groupSystemPrompt },
     extra: {
+      NativeThreadVisibility: params.isThreadChannel
+        ? params.channelType === ChannelType.PrivateThread
+          ? "private"
+          : params.channelType === ChannelType.PublicThread ||
+              params.channelType === ChannelType.AnnouncementThread
+            ? "public"
+            : undefined
+        : undefined,
       CommandArgs: params.commandArgs,
       CommandTargetSessionKey: params.commandTargetSessionKey,
       CommandSource: "native",
@@ -233,6 +251,7 @@ export async function buildDiscordNativeInteractionContext(
     isDirectMessage: channelContext.isDirectMessage,
     isGroupDm: channelContext.isGroupDm,
     isThreadChannel: channelContext.isThreadChannel,
+    channelType: channelContext.channelType,
   });
   return { ctxPayload, ...targets };
 }

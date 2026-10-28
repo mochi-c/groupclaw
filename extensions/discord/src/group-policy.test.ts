@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
+  resolveDiscordMemoryPolicy,
 } from "./group-policy.js";
 
 function createCfg(discord: Record<string, unknown>): OpenClawConfig {
@@ -11,6 +12,72 @@ function createCfg(discord: Record<string, unknown>): OpenClawConfig {
 }
 
 describe("discord group policy", () => {
+  it("uses configured members independently of ACLs and excludes launch Channel memory", () => {
+    const cfg = createCfg({
+      guilds: {
+        "900": {
+          channels: {
+            "100": { members: ["2", "1", "2"], users: ["3"], threadMode: "always" },
+          },
+        },
+      },
+    });
+    const policy = resolveDiscordMemoryPolicy({
+      cfg,
+      origin: { provider: "discord", nativeChannelId: "100" },
+    });
+    expect(policy?.channelMemory).toBe("exclude");
+    expect(policy?.group?.members.map((member) => member.identity.id)).toEqual(["1", "2"]);
+    expect(policy?.group?.workspaceShared).toBe(true);
+    cfg.channels!.discord!.accounts = {
+      other: { guilds: { "901": { channels: { "200": { members: ["3"], threadMode: "auto" } } } } },
+    };
+    expect(
+      resolveDiscordMemoryPolicy({ cfg, origin: { nativeChannelId: "100" } })?.group
+        ?.workspaceShared,
+    ).toBe(false);
+    cfg.channels!.discord!.accounts.isolated = { guilds: {} };
+    expect(
+      resolveDiscordMemoryPolicy({
+        cfg,
+        origin: { accountId: "isolated", nativeChannelId: "100" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each(["public", "private", undefined] as const)(
+    "limits inherited members to a verified public Thread (%s)",
+    (visibility) => {
+      const cfg = createCfg({
+        guilds: { "900": { channels: { "100": { members: ["1", "2"], threadMode: "auto" } } } },
+      });
+      const policy = resolveDiscordMemoryPolicy({
+        cfg,
+        origin: {
+          nativeChannelId: "101",
+          nativeParentChannelId: "100",
+          threadId: "101",
+          nativeThreadVisibility: visibility,
+        },
+      });
+      expect(policy?.group?.members.map((member) => member.identity.id)).toEqual(
+        visibility === "public" ? ["1", "2"] : undefined,
+      );
+      expect(policy?.channelMemory).toBe(visibility === "public" ? "include" : "exclude");
+    },
+  );
+
+  it("keeps configured member reads available when Dream Thread policy is missing", () => {
+    const cfg = createCfg({ guilds: { "900": { channels: { "100": { members: ["1"] } } } } });
+    expect(
+      resolveDiscordMemoryPolicy({ cfg, origin: { nativeChannelId: "100" } })?.group,
+    ).toMatchObject({
+      members: [{ identity: { id: "1" } }],
+      consolidationAllowed: false,
+      workspaceShared: false,
+    });
+  });
+
   it("prefers a channel sender policy over the guild plain policy", () => {
     const cfg = createCfg({
       guilds: {

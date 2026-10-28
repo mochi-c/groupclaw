@@ -5,13 +5,15 @@ import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MemoryFlushObservation } from "../../hooks/internal-hook-types.js";
+import { startSessionMemoryFlushEvent } from "../../hooks/session-memory-flush.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   delegateMemoryAudience,
   type MemoryAudienceGrant,
   resolveMemoryAudienceFromEntry,
 } from "../../plugins/memory-audience.js";
-import { getMemoryProviderRuntime } from "../../plugins/memory-state.js";
+import { usesLoadedMemoryAudience } from "../../plugins/memory-state.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { resolveModelFallbackOptions } from "./agent-runner-utils.js";
 import { isToolsMemoryFlushPlan, resolveMemoryFlushPlanForRun } from "./memory-flush-plan.js";
@@ -94,9 +96,9 @@ export async function prepareMemoryFlushAttempt(params: {
     { agentId, sessionKey, storePath: params.storePath },
     params.cfg,
   );
-  // Only a native provider consumes audiences; other tool-plan owners resolve none.
+  // File-arm flushes expose only their restricted writer, not scoped plugin tools.
   const sourceAudience =
-    isToolsMemoryFlushPlan(plan) && getMemoryProviderRuntime()
+    isToolsMemoryFlushPlan(plan) && usesLoadedMemoryAudience(params.cfg)
       ? await resolveMemoryAudienceFromEntry(
           {
             agentId,
@@ -106,6 +108,7 @@ export async function prepareMemoryFlushAttempt(params: {
             senderIsOwner: followupRun.memoryAudienceSenderIsOwner ?? followupRun.run.senderIsOwner,
             storePath: sourceStorePath,
             assertCallerCurrent: params.assertCurrent,
+            cfg: params.cfg,
           },
           sessionEntry,
         )
@@ -180,6 +183,23 @@ export async function prepareMemoryFlushAttempt(params: {
           recordPersistenceToolSuccess: params.recordPersistenceToolSuccess,
         }
       : undefined;
+    const memoryEvent =
+      sourceAudience && memoryFlushTools
+        ? await startSessionMemoryFlushEvent({
+            cfg: params.cfg,
+            workspaceDir: followupRun.run.workspaceDir,
+            audience: sourceAudience.audience,
+            sessionKey,
+            sessionEntry,
+            observation: {
+              flushId: memoryFlushTools.flushId,
+              runId: params.flushRunId,
+              compactionCount: sessionEntry.compactionCount ?? 0,
+            },
+            assertCurrent: params.assertCurrent,
+          })
+        : undefined;
+    params.assertCurrent();
     const preparedRunAdmission = prepareSystemAgentRunAdmission(
       params.cfg,
       params.flushRunId,
@@ -197,6 +217,16 @@ export async function prepareMemoryFlushAttempt(params: {
       memorySession,
       memoryAudience: delegated?.audience,
       memoryFlushTools,
+      recordEvent: async (outcome: MemoryFlushObservation["outcome"]) => {
+        try {
+          await memoryEvent?.update({
+            status: outcome === "failed" || outcome === "exhausted" ? "failed" : "completed",
+            outcome,
+          });
+        } catch (error) {
+          log.warn(`memory flush Event settlement failed: ${String(error)}`);
+        }
+      },
       release,
     };
   } catch (error) {

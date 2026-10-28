@@ -22,7 +22,7 @@ describe("automatic candidates during provenance repair", () => {
     async (startupCatchup, { signal }) => {
       const projectKey = "github.com/example/project";
       await fs.writeFile(
-        path.join(fixture.paths.workspace, "MEMORY.md"),
+        path.join(fixture.paths.memory, "MEMORY.md"),
         `- Keep the release local. <!-- trigger: release local --> <!-- project: ${projectKey} -->\n`,
       );
       await Promise.all(
@@ -140,7 +140,7 @@ describe("automatic candidates during provenance repair", () => {
   it("drains admitted candidate repair retries before closing the database", async () => {
     const projectKey = "github.com/example/project";
     await fs.writeFile(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
+      path.join(fixture.paths.memory, "MEMORY.md"),
       `- Preserve the release preference. <!-- trigger: release local --> <!-- project: ${projectKey} -->\n`,
     );
     const ftsConfig = fixture.createConfig({ provider: "none", vectorEnabled: false });

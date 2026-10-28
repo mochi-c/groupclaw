@@ -1,5 +1,7 @@
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { emitSessionCompactedHook } from "../../hooks/session-compaction.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
@@ -226,6 +228,9 @@ type CompactionHookParams = {
   sessionKey: string;
   sessionAgentId: string;
   workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  storePath?: string;
   messageProvider?: string;
   assertActive?: () => void;
   onHookMessages?: CompactEmbeddedAgentSessionParams["onCompactionHookMessages"];
@@ -233,6 +238,7 @@ type CompactionHookParams = {
   | { phase: "before"; metrics: ReturnType<typeof buildBeforeCompactionHookMetrics> }
   | {
       phase: "after";
+      memoryWorkspaceDir: string;
       messageCountAfter: number;
       tokensAfter?: number;
       compactedCount: number;
@@ -241,6 +247,7 @@ type CompactionHookParams = {
       summaryLength?: number;
       tokensBefore?: number;
       firstKeptEntryId?: string;
+      originalMessages?: AgentMessage[];
     }
 );
 
@@ -327,6 +334,25 @@ export async function runCompactionHooks(params: CompactionHookParams): Promise<
         errorStack: err instanceof Error ? err.stack : undefined,
       });
     }
+  }
+  params.assertActive?.();
+  if (params.phase === "after") {
+    await emitSessionCompactedHook({
+      cfg: params.config,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      sessionEntry: params.sessionEntry,
+      storePath: params.storePath,
+      workspaceDir: params.memoryWorkspaceDir,
+      messages: params.originalMessages,
+      messageCount: params.messageCountAfter,
+      compactedCount: params.compactedCount,
+      tokensBefore: params.tokensBefore,
+      tokensAfter: params.tokensAfter,
+      firstKeptEntryId: params.firstKeptEntryId,
+      assertCurrent: params.assertActive,
+    });
   }
   params.assertActive?.();
 }

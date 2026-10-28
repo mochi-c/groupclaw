@@ -198,6 +198,14 @@ admitted handler is active. Retained or still-pending reads reject after the
 handler settles, its configured hook timeout, forced retirement of the owning
 plugin instance, or the shutdown/restart drain deadline.
 
+Current hosts also provide optional `endedTranscript.session` with the departing
+conversation's canonical delivery and participant facts, and `assertActive()`
+for guarded persistence after awaited work. Both follow the same conversation
+permission and invocation lifetime as the reader. These facts describe the
+source; they do not restore the ended turn's authority or grant later Dream
+publication. Facts may be available even when no stable transcript reader exists.
+Plugins that persist a tail must require this lifetime assertion on older hosts.
+
 When no safe source exists, the value is `{ available: false, reason }`.
 Current reasons distinguish missing conversation permission, a lifecycle with
 no stable cutoff, deleted incognito state, an unavailable archive, and an

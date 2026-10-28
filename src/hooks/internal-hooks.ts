@@ -224,7 +224,7 @@ export function createInternalHookEvent(
   type: InternalHookEventType,
   action: string,
   sessionKey: string,
-  context: Record<string, unknown> = {},
+  context: InternalHookEvent["context"] = {},
 ): InternalHookEvent {
   return {
     type,

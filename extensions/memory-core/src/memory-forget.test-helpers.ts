@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -8,6 +10,7 @@ import { configureMemoryCoreDreamingStateForTests } from "./test-helpers.js";
 export async function createMemoryForgetFixture(prefix = "openclaw-memory-forget-") {
   const state = await createOpenClawTestState({ prefix, layout: "state-only" });
   const { stateDir, workspaceDir } = state;
+  await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
   await configureMemoryCoreDreamingStateForTests();
   const cfg: OpenClawConfig = {
     agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },

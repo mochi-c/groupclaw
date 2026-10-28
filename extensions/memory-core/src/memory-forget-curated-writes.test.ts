@@ -110,12 +110,12 @@ describe("memory forget curated writes", () => {
     const observedAt = Date.parse("2026-08-26T12:34:56.000Z");
     const memoryContent = "# Long-Term Memory\nA harness-authored private fact.\n";
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memoryContent);
+    await fs.writeFile(path.join(workspaceDir, "memory", "MEMORY.md"), memoryContent);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\n");
     await fs.writeFile(path.join(workspaceDir, "memory", "profile.md"), "# Profile\n");
     const patchInput = [
       "*** Begin Patch",
-      "*** Update File: MEMORY.md",
+      "*** Update File: memory/MEMORY.md",
       "@@",
       "+A harness-authored private fact.",
       "*** Update File: README.md",
@@ -208,17 +208,21 @@ describe("memory forget curated writes", () => {
     });
 
     expect(preview.curatedWrites).toEqual([
-      { relativePath: "MEMORY.md", observedAt },
       { relativePath: "memory/archive.md", observedAt: observedAt + 1 },
+      { relativePath: "memory/MEMORY.md", observedAt },
       { relativePath: "memory/profile.md", observedAt },
       { relativePath: "memory/structured.md", observedAt },
       { relativePath: "USER.md", observedAt },
     ]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8")).toBe(
+      memoryContent,
+    );
 
     const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8")).toBe(
+      memoryContent,
+    );
   });
 });

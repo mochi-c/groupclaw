@@ -1,12 +1,22 @@
+import { getLoadedChannelPluginById } from "../channels/plugins/registry-loaded.js";
 import {
   isSessionDeliveryGenerationRevokedError,
   prepareSessionGenerationFacts,
 } from "../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { MemoryContextReadContext } from "../memory/scoped-memory.js";
+import {
+  captureMemorySourceSession,
+  resolveMemoryContext,
+  type MemorySourceSession,
+} from "../memory/session-memory-context.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 
 const MAX_LINEAGE_HOPS = 64;
@@ -21,6 +31,9 @@ type AudienceRecord = {
   leases: GenerationLease[];
   state: "current" | "stale" | "released";
   holders: number;
+  execution: AbortController;
+  releases?: Array<() => void>;
+  assertContextCurrent?: () => void;
 };
 
 /** A host-minted audience plus the owner-held release for its session leases. */
@@ -36,6 +49,10 @@ const audienceRecords = new WeakMap<object, AudienceRecord>();
 const audienceSessionKeys = new WeakMap<object, string>();
 
 function releaseRecordLeases(record: AudienceRecord): void {
+  record.execution.abort(new Error("memory audience was released by its owner"));
+  for (const release of record.releases?.splice(0) ?? []) {
+    release();
+  }
   for (const lease of record.leases.splice(0)) {
     lease.release();
   }
@@ -93,15 +110,19 @@ async function leaseSessionGeneration(params: {
   storePath: string;
   /** Undefined leases the row's absence: any later row for the key revokes it. */
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
+  onRevoked?: (reason: unknown) => void;
 }): Promise<GenerationLease | undefined> {
   try {
-    return await prepareSessionGenerationFacts({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
-      sessionId: params.entry?.sessionId ?? null,
-      lifecycleRevision: params.entry?.lifecycleRevision ?? null,
-    });
+    return await prepareSessionGenerationFacts(
+      {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
+        sessionId: params.entry?.sessionId ?? null,
+        lifecycleRevision: params.entry?.lifecycleRevision ?? null,
+      },
+      params.onRevoked,
+    );
   } catch (error) {
     if (isSessionDeliveryGenerationRevokedError(error)) {
       return undefined;
@@ -117,6 +138,12 @@ function assertRecordCurrent(record: AudienceRecord): void {
     }
     if (current.state === "stale") {
       throw new Error("memory audience is no longer current");
+    }
+    try {
+      current.assertContextCurrent?.();
+    } catch (error) {
+      current.execution.abort(error);
+      throw error;
     }
     for (const lease of current.leases) {
       try {
@@ -170,6 +197,9 @@ type MemoryAudienceResolutionParams = {
   /** Store that admitted the turn; lineage hops for the same agent share it. */
   storePath: string;
   assertCallerCurrent?: () => void;
+  cfg?: OpenClawConfig;
+  /** Background work rechecks the current configured audience before effects. */
+  getConfig?: () => OpenClawConfig;
 };
 
 /**
@@ -185,7 +215,12 @@ export async function resolveMemoryAudienceFromEntry(
   const { agentId, storePath } = params;
   const assertCallerCurrent = params.assertCallerCurrent ?? (() => {});
   const seen = new Set<string>();
-  const record: AudienceRecord = { leases: [], state: "current", holders: 0 };
+  const record: AudienceRecord = {
+    leases: [],
+    state: "current",
+    holders: 0,
+    execution: new AbortController(),
+  };
   let requiredLifecycleRevision: string | undefined;
   const deny = (reason: string, legacyLineage?: true): MemoryAudienceResolution => {
     releaseRecordLeases(record);
@@ -219,7 +254,13 @@ export async function resolveMemoryAudienceFromEntry(
       }
       // The lease re-verifies this exact incarnation against current storage,
       // so a change between the read above and here denies the grant.
-      const lease = await leaseSessionGeneration({ agentId, sessionKey, storePath, entry });
+      const lease = await leaseSessionGeneration({
+        agentId,
+        sessionKey,
+        storePath,
+        entry,
+        onRevoked: (reason) => record.execution.abort(reason),
+      });
       if (!lease) {
         return deny(`session ${sessionKey} changed while its memory audience was resolved`);
       }
@@ -255,12 +296,54 @@ export async function resolveMemoryAudienceFromEntry(
       // Revalidate every captured hop after the final await, before minting.
       assertCallerCurrent();
       assertRecordCurrent(record);
+      const origin = sessionDeliveryOrigin(entry);
+      const provider = origin?.provider ?? origin?.surface;
+      const resolvePolicy = provider
+        ? getLoadedChannelPluginById(provider)?.groups?.resolveMemoryPolicy
+        : undefined;
+      const getConfig = params.getConfig;
+      const context = resolveMemoryContext(
+        entry,
+        sessionKey,
+        getConfig?.() ?? params.cfg ?? {},
+        resolvePolicy,
+      );
+      if (getConfig) {
+        const fingerprint = JSON.stringify(context);
+        let contextRevoked = false;
+        record.assertContextCurrent = () => {
+          if (
+            contextRevoked ||
+            JSON.stringify(resolveMemoryContext(entry, sessionKey, getConfig(), resolvePolicy)) !==
+              fingerprint
+          ) {
+            contextRevoked = true;
+            throw new Error("memory context membership or publication authority changed");
+          }
+        };
+        record.releases = [
+          sessionChanges.subscribe((change) => {
+            if (!("all" in change)) {
+              return;
+            }
+            try {
+              assertRecordCurrent(record);
+            } catch (error) {
+              record.execution.abort(error);
+            }
+          }),
+        ];
+      }
       // Only the durable root chat type selects the partition. Thread-shaped
       // keys intentionally receive no special interpretation here.
       if (entry.chatType === "direct" && senderIsOwner === true) {
         return {
           status: "granted",
-          ...mintMemoryAudience({ kind: "owner-private", agentId }, params.sessionKey, record),
+          ...mintMemoryAudience(
+            { kind: "owner-private", agentId, context },
+            params.sessionKey,
+            record,
+          ),
         };
       }
       if (
@@ -271,7 +354,13 @@ export async function resolveMemoryAudienceFromEntry(
         return {
           status: "granted",
           ...mintMemoryAudience(
-            { kind: "conversation", agentId, sessionKey, sessionId },
+            {
+              kind: "conversation",
+              agentId,
+              sessionKey,
+              sessionId,
+              context,
+            },
             params.sessionKey,
             record,
           ),
@@ -285,7 +374,9 @@ export async function resolveMemoryAudienceFromEntry(
     // A caller that is no longer current propagates; unavailable session
     // storage denies memory access instead of failing the whole turn.
     assertCallerCurrent();
-    return deny(`session storage could not verify the lineage: ${formatErrorMessage(error)}`);
+    return deny(
+      `session lineage or memory context could not be verified: ${formatErrorMessage(error)}`,
+    );
   }
 }
 
@@ -345,16 +436,24 @@ export async function delegateMemoryAudience(
       `memory audience delegation requires an existing child session: ${child.sessionKey}`,
     );
   }
+  const execution = new AbortController();
   const lease = await leaseSessionGeneration({
     agentId,
     sessionKey: child.sessionKey,
     storePath: child.storePath,
     entry,
+    onRevoked: (reason) => execution.abort(reason),
   });
   if (!lease) {
     throw new Error(`child session changed during memory audience delegation: ${child.sessionKey}`);
   }
-  const record: AudienceRecord = { parent, leases: [lease], state: "current", holders: 0 };
+  const record: AudienceRecord = {
+    parent,
+    leases: [lease],
+    state: "current",
+    holders: 0,
+    execution,
+  };
   try {
     // The parent can go stale while the child row is read; recheck both after the awaits.
     assertCallerCurrent();
@@ -364,6 +463,16 @@ export async function delegateMemoryAudience(
     throw error;
   }
   return mintMemoryAudience({ ...audience }, child.sessionKey, record);
+}
+
+/** Execution borrows cancellation from every live lineage owner, never from caller-supplied IDs. */
+export function readMemoryAudienceExecutionSignal(audience: MemoryAudience): AbortSignal {
+  assertMemoryAudienceCurrent(audience);
+  const signals: AbortSignal[] = [];
+  for (let record = audienceRecords.get(audience); record; record = record.parent) {
+    signals.push(record.execution.signal);
+  }
+  return AbortSignal.any(signals);
 }
 
 /** Reject a retained audience after any captured session incarnation changes. */
@@ -388,4 +497,107 @@ export function assertMemoryCallerCurrent(context: MemoryCallerContext): void {
     assertMemoryAudienceCurrent(authority.audience);
   }
   context.signal?.throwIfAborted();
+}
+
+/** Admit background source facts through the same session-generation owner as tools. */
+export async function withMemoryDreamSource<T>(
+  params: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    storePath: string;
+    assertCurrent: () => void;
+    cfg?: OpenClawConfig;
+    getConfig?: () => OpenClawConfig;
+    /** Host-captured departing facts supplied by the durable source owner. */
+    endedSession?: MemorySourceSession;
+  },
+  consume: (facts: {
+    context: MemoryContextReadContext;
+    origin: NonNullable<ReturnType<typeof sessionDeliveryOrigin>>;
+    session: MemorySourceSession;
+    assertCurrent(this: void): void;
+  }) => Promise<T>,
+): Promise<T> {
+  const entry = await readEntryInWorker({
+    ...params,
+    assertCallerCurrent: params.assertCurrent,
+  });
+  params.assertCurrent();
+  if (isIncognitoSessionKey(params.sessionKey) || entry?.incognito) {
+    throw new Error("Dream cannot persist incognito session evidence");
+  }
+  if (params.endedSession) {
+    if (!isAgentSessionKey(params.sessionKey, params.agentId) || !isSessionId(params.sessionId)) {
+      throw new Error("Dream ended source has malformed session identity");
+    }
+    // Bind the present row (or its absence) to the existing generation owner.
+    // Archived facts describe the source, never revive its former turn authority.
+    const lease = await leaseSessionGeneration({ ...params, entry });
+    if (!lease) {
+      throw new Error("Dream source binding changed during admission");
+    }
+    try {
+      const session = params.endedSession;
+      const origin = sessionDeliveryOrigin(session);
+      if (!origin || !session.chatType) {
+        throw new Error("Dream ended source has no canonical conversation facts");
+      }
+      const provider = origin.provider ?? origin.surface;
+      const resolvePolicy = provider
+        ? getLoadedChannelPluginById(provider)?.groups?.resolveMemoryPolicy
+        : undefined;
+      const getContext = () =>
+        resolveMemoryContext(
+          { ...session, sessionId: params.sessionId, updatedAt: 0 },
+          params.sessionKey,
+          params.getConfig?.() ?? params.cfg ?? {},
+          resolvePolicy,
+        );
+      const context = getContext();
+      const fingerprint = JSON.stringify(context);
+      const assertCurrent = () => {
+        params.assertCurrent();
+        lease.assertCurrent();
+        if (JSON.stringify(getContext()) !== fingerprint) {
+          throw new Error("memory context membership or publication authority changed");
+        }
+      };
+      assertCurrent();
+      return await consume({ context, origin, session, assertCurrent });
+    } finally {
+      lease.release();
+    }
+  }
+  if (!entry || entry.sessionId !== params.sessionId || entry.spawnedBy) {
+    throw new Error("Dream source session is missing, replaced, or delegated");
+  }
+  const origin = sessionDeliveryOrigin(entry);
+  if (!origin) {
+    throw new Error("Dream source has no canonical delivery origin");
+  }
+  const grant = await resolveMemoryAudienceFromEntry(
+    { ...params, senderIsOwner: undefined, assertCallerCurrent: params.assertCurrent },
+    entry,
+  );
+  if (grant.status !== "granted") {
+    throw new Error(grant.reason);
+  }
+  try {
+    const context = grant.audience.context;
+    if (!context) {
+      throw new Error("Dream source has no admitted memory context");
+    }
+    return await consume({
+      context,
+      origin,
+      session: captureMemorySourceSession(entry)!,
+      assertCurrent: () => {
+        params.assertCurrent();
+        assertMemoryAudienceCurrent(grant.audience);
+      },
+    });
+  } finally {
+    grant.release();
+  }
 }

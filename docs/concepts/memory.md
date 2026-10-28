@@ -12,47 +12,55 @@ saved to disk; there is no hidden state.
 
 ## How it works
 
-Your agent has four memory-related files:
+Your agent uses these memory artifacts:
 
 - **`USER.md`** (optional) — stable preferences, communication style,
   relationships, and active-project context written as directives. Loaded at
   the start of a session with a separate small budget.
-- **`MEMORY.md`** — long-term memory. Durable non-profile facts and decisions.
-  Loaded at the start of a session.
-- **`memory/YYYY-MM-DD.md`** (or `memory/YYYY-MM-DD-<slug>.md`) — daily notes.
-  Running context and observations. Today's and yesterday's dated notes load
-  automatically on a bare `/new` or `/reset`; slugged variants, such as those
-  written by the bundled session-memory hook, are picked up alongside the
-  date-only file.
+- **`memory/MEMORY.md`** — curated Workspace knowledge. Channel, Thread, and User
+  scopes have their own `MEMORY.md` files; the runtime admits the layers readable
+  by the current conversation. Doctor migrates legacy root `MEMORY.md`.
+- **Scoped `Fragment/YYYY-MM-DD.md`** — timestamped notes appended through
+  `memory_fragment_append`. Dream selects useful evidence for curated memory;
+  temporary plans can remain available to authorized recall.
+- **Legacy daily notes** — `memory/YYYY-MM-DD.md` and slugged variants remain
+  operator artifacts. Conversation recording uses scoped Fragments.
+- **Scoped `Event/*.md`** — framework lifecycle evidence. The bundled
+  session-memory hook records resets, rollovers, successful embedded compactions,
+  and committed Discord Thread closures under the source Channel/Thread, or
+  Workspace for local sessions. Closure Events retain transcript archive
+  references. These artifacts are available
+  to authorized recall and are never automatically loaded as daily notes.
 - **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep summaries for
   human review, including grounded historical backfill entries.
 
 <Tip>
 If you want your agent to remember something, just ask it: "Remember that I
-prefer TypeScript." It writes the note to the appropriate file.
+prefer TypeScript." It appends a Fragment and reports that the note was recorded.
+Dream later decides how to update curated memory.
 </Tip>
 
 ## What goes where
 
-`USER.md` is the compact user-model layer. Write stable preferences and profile
-facts as imperative directives with observed-date and active/superseded
-metadata. When a preference changes, supersede it in place instead of appending
-a contradictory active directive. See [User model](/concepts/user-model).
+`USER.md` can supply operator-maintained startup directives. Conversation
+preferences and corrections are recorded as Fragments with the subject and
+source; Dream reconciles the participating User's curated memory.
+See [User model](/concepts/user-model).
 
-`MEMORY.md` is the compact, curated layer for durable non-profile facts,
+Scoped `MEMORY.md` is the compact, curated layer for durable facts,
 standing decisions, and short summaries that should be available at the start
 of a session. It is not a raw transcript, daily log, or exhaustive archive.
 
-`memory/YYYY-MM-DD.md` files are the working layer: detailed daily notes,
-observations, session summaries, and raw context that may still be useful
-later. These are indexed for `memory_search` and `memory_get`, but are not
-injected into the bootstrap prompt on every turn.
+Scoped Fragments are the working layer: observations and context that may still
+be useful later. They are available to authorized memory search and reads, and
+are excluded from bootstrap.
 
-Over time, useful material from daily notes is distilled into `MEMORY.md` by
-the default [dreaming](/concepts/dreaming) sweep. The generated workspace
-instructions still encourage the agent to record durable facts as it works,
-while dreaming handles background consolidation. The default heartbeat prompt
-performs no memory maintenance on its own.
+The [dreaming](/concepts/dreaming) sweep owns curated updates and formal Archives.
+A publication can cite part of a Fragment while retaining the original note.
+Cleanup requires explicit full coverage or discard; unfinished evidence remains
+available. Ordinary file tools reject direct memory edits and filter reads to the
+current audience. Full shell and desktop authority require separate execution
+isolation and are outside this file-tool guarantee.
 
 If `MEMORY.md` grows past the bootstrap file budget, OpenClaw keeps the file on
 disk intact but truncates the copy injected into context. Treat that as a
@@ -60,6 +68,13 @@ signal to move detailed material into `memory/*.md`, keep only a durable
 summary in `MEMORY.md`, or raise the bootstrap limits if you want to spend more
 prompt budget. Use `/context list`, `/context detail`, or `openclaw doctor` to
 see raw vs. injected sizes and truncation status.
+
+For an admitted conversation, bootstrap also loads the current Channel, optional
+Thread, and participating Users' curated `MEMORY.md` summaries. These refresh
+each turn and use a separate 12,000-character pool: up to 2,000 characters for
+each conversation scope and 1,000 for each User. Truncated summaries identify
+the full source to read. Scope authorization and provenance checks still apply;
+Fragments, Events, and Archives remain explicit recall sources.
 
 ## Import from coding assistants
 
@@ -146,19 +161,28 @@ work.
 
 ## Memory tools
 
-The agent has three tools for working with memory:
+The active memory plugin (default: `memory-core`) supplies these tools when
+their required context and permissions are available:
 
 - **`memory_search`** — finds relevant notes using semantic search, even when
   the wording differs from the original.
 - **`memory_get`** — reads a specific memory file or line range.
+- **`memory_read`** — expands a memory-file `ref` returned by search. It defaults
+  to the referenced excerpt; `from` and `lines` can select another bounded range
+  in that file. Follow `nextRef` to continue reading. Each request checks the
+  current Agent and conversation access; a reference is neither an access grant
+  nor a frozen snapshot. Deleted files return `status=not_found`.
+- **`memory_context_read`** — reads the current Workspace, Channel, optional
+  Thread, and participant curated memories, with bounded pagination.
+- **`memory_fragment_append`** — appends a dated note in the admitted Channel
+  or Thread for later Dream consolidation.
 - **`intent`** — creates, lists, or explicitly cancels event-conditioned
   standing intents. Time-based reminders continue to use scheduled tasks.
 
-All three tools are provided by the active memory plugin (default: `memory-core`).
-
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files
-that `memory_get` can read. Use `sessions_search` with distinctive text from the
+that `memory_get` or `memory_read` can read, and they have no memory-file `ref`.
+Use `sessions_search` with distinctive text from the
 snippet (optionally scope `sessionKey` to the transcript ID), then pass its returned
 `sessionKey`, `messageId`, and `sessionId` to `sessions_history` for a bounded,
 sanitized excerpt. These tools enforce session visibility independently on each
@@ -230,7 +254,8 @@ dashboards, bridge mode, and Obsidian-friendly workflows.
 
 Before [compaction](/concepts/compaction) summarizes your conversation,
 OpenClaw runs a silent turn that reminds the agent to save important context
-to durable memory. Memory Core saves to a workspace memory file. A selected
+to durable memory. Memory Core appends candidates to the current Channel or
+Thread Fragment for later Dream consolidation. A selected
 memory plugin can supply its own persistence tools. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
 OpenClaw resolves when the flush runs from that host config and the active
@@ -242,11 +267,8 @@ The flush uses a private copy of the conversation, so its housekeeping messages
 never appear in later user turns, even if interrupted. Its writes to memory
 are still saved normally.
 
-Memory Core's file flush requires writable workspace access. Sessions whose sandbox
-requires read-only or no workspace access skip the flush, including sessions
-with a persisted sandbox requirement that overrides the agent's configuration.
-
-A native provider's tools-based flush does not require a writable workspace;
+Memory Core and native providers can use a tools-based flush without writable
+workspace access in the inference sandbox;
 other flush plans are not resolved for sessions that cannot write it. It exposes
 `read`, the provider's declared persistence tools, and optional read-only lookup
 tools, subject to normal tool policies. Those tools receive the source turn's
@@ -257,6 +279,12 @@ persistence tool completes without error or the agent returns `NO_REPLY`; lookup
 success alone does not complete the flush. Skipping or failing this optional step
 does not prevent compaction. Plugin authors can find the contract and retry
 identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
+
+With the session-memory hook enabled, a settled tools-based flush records a
+`memory.pre-compaction-flush` Event in its granted Channel/Thread scope. It
+records the source session, retry identity, and actual outcome without copying
+the conversation. Source revocation and launch Channel exclusion prevent capture;
+Event capture failure is logged without blocking compaction.
 
 To keep that housekeeping turn on a local model, set an exact override that
 applies only to the memory-flush turn (it does not inherit the active

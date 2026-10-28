@@ -61,6 +61,27 @@ async function createCommandCancellationFixture() {
 }
 
 describe("remote shell command cancellation", () => {
+  it("rejects revoked caller authority after skills refresh before running the requested command", async () => {
+    const { backend, session } = await createCommandCancellationFixture();
+    let current = true;
+    session.uploadDirectory.mockImplementationOnce(async () => {
+      current = false;
+    });
+    await expect(
+      backend.runShellCommand({
+        script: "touch sentinel",
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("caller revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("caller revoked");
+    expect(session.runCommand).toHaveBeenCalledOnce();
+    expect(session.runCommand.mock.calls[0]?.[0].remoteCommand).not.toContain("sentinel");
+    expect(session.dispose).toHaveBeenCalledOnce();
+  });
+
   it.each(["clear", "upload"] as const)(
     "cancels the skills %s and joins it and session disposal before rejecting",
     async (phase) => {

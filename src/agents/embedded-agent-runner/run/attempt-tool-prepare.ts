@@ -214,6 +214,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     agentId: attempt.sandboxAgentId ?? params.setup.sessionAgentId,
     conversationToolPolicy: attempt.conversationToolPolicy,
     sandboxToolPolicy: params.setup.sandbox?.tools,
+    isolatedWorkspace: params.setup.sandbox?.isolatedWorkspace,
     inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
     inputProvenance: attempt.inputProvenance,
@@ -301,7 +302,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             codeModeSkills,
             installedSkills: params.installedSkills,
             preparedModelRuntime: attempt.preparedModelRuntime,
-            requireWorkspaceOnly: attempt.requireWorkspaceOnly,
+            requireWorkspaceOnly: params.setup.sandbox?.isolatedWorkspace
+              ? true
+              : attempt.requireWorkspaceOnly,
             sessionReadScopeKey: attempt.sessionReadScopeKey,
             sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
             webSearchEnabled: attempt.toolOverrides?.webSearch !== false,

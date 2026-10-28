@@ -20,6 +20,7 @@ import {
 } from "./manager-cpu-worker-runtime.js";
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
 import { readMemoryRecallData } from "./manager-retrieval-read.js";
+import type { MemoryPathFilter } from "./manager-search-shared.js";
 import { prepareExactPathMatcher, type ExactPathSpecificity } from "./manager-search.js";
 import type {
   MemoryKeywordWorkerQuery,
@@ -52,6 +53,7 @@ type KeywordSearchOptions = {
   signal?: AbortSignal;
   exactPathQuery?: string;
   rankingQuery?: string;
+  memoryPathFilter?: MemoryPathFilter;
 };
 
 function compareKeywordSearchHits(
@@ -286,6 +288,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         limit,
         snippetMaxChars: SNIPPET_MAX_CHARS,
         sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+        memoryPathFilter: options?.memoryPathFilter,
         boostFallbackRanking: options?.boostFallbackRanking,
         rankingQuery: options?.rankingQuery,
       },
@@ -298,6 +301,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         limit,
         snippetMaxChars: SNIPPET_MAX_CHARS,
         sourceFilter: this.buildSourceFilter(PATH_FTS_TABLE, sourceFilterList),
+        memoryPathFilter: options?.memoryPathFilter,
       },
     };
   }
@@ -360,7 +364,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   protected async searchKeywordWithFallback(
     query: string,
     limit: number,
-    options: { boostFallbackRanking?: boolean; signal?: AbortSignal } | undefined,
+    options: KeywordSearchOptions | undefined,
     sourceFilterList: MemorySource[],
     initialResult?: MemoryKeywordWorkerResult,
   ): Promise<KeywordSearchHit[]> {

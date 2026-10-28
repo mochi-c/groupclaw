@@ -395,6 +395,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Transport-verified thread visibility, never inferred from the parent or message text. */
+  NativeThreadVisibility?: "public" | "private";
   /** Channel-owned local conversation image reference; never rendered into prompt text. */
   ConversationAvatar?: string;
   /** Display-only launch destination; not delivery routing or prompt content. */

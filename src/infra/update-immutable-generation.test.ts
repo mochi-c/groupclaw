@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readImmutableGenerationManifest } from "./update-immutable-generation-manifest.js";
 import {
   sealImmutableGeneration,
   verifyImmutableGeneration,
@@ -133,11 +135,37 @@ describe("sealed immutable generation", () => {
     await fs.symlink("../dist/index.js", path.join(root, "node_modules", "contained"));
     const index = path.join(root, ".git", "index");
     const beforeIndex = await fs.readFile(index);
-    await sealImmutableGeneration(root);
+    const generationStat = await fs.lstat(root);
+    const ownership = {
+      root,
+      rootIdentity: `${generationStat.dev}:${generationStat.ino}`,
+      releasesIdentity: `${generationStat.dev}:${generationStat.ino}`,
+      sha,
+    };
+    await sealImmutableGeneration(root, ownership);
     const beforeMtime = (await fs.stat(index)).mtimeMs;
     const result = await verifyImmutableGeneration(root, sha, runGit);
     expect(result.buildDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(result.identity).toMatch(/^\d+:\d+$/u);
+    const fstat = fsSync.fstatSync;
+    vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) => {
+      const stat = fstat(...args);
+      stat.uid = typeof stat.uid === "bigint" ? 0n : 0;
+      return stat;
+    });
+    const lstat = fsSync.lstatSync;
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      const stat = lstat(...args);
+      if (stat) {
+        stat.uid = typeof stat.uid === "bigint" ? 0n : 0;
+      }
+      return stat;
+    });
+    expect(readImmutableGenerationManifest(root, ownership)).toMatchObject({
+      sha,
+      identity: result.identity,
+      buildDigest: result.buildDigest,
+    });
     expect((await fs.stat(executable)).mode & 0o777).toBe(0o555);
     expect((await fs.stat(path.join(root, "source.txt"))).mode & 0o777).toBe(0o444);
     expect((await fs.stat(root)).mode & 0o777).toBe(0o555);

@@ -4,7 +4,10 @@ import type { ChatType } from "../channels/chat-type.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
+import { WORKSPACE_MEMORY_RELATIVE_PATH } from "../memory/scoped-memory.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
@@ -16,6 +19,10 @@ import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
+import {
+  readWorkspaceFileWithGuards,
+  setWorkspaceFileSourceIdentity,
+} from "./workspace-file-read.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -275,6 +282,7 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
 type BootstrapFileResolutionParams = {
   bootstrapUserProfileId?: string;
+  memoryAudience?: MemoryAudience;
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -308,6 +316,19 @@ async function resolveBootstrapFiles(
   hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
+  const audienceOwner = params.memoryAudience
+    ? await import("../plugins/memory-audience.js")
+    : undefined;
+  const assertAudienceCurrent = () => {
+    if (params.memoryAudience && audienceOwner) {
+      audienceOwner.assertMemoryAudienceSession(params.memoryAudience, params.sessionKey);
+      audienceOwner.assertMemoryAudienceCurrent(params.memoryAudience);
+      if (params.agentId && params.agentId !== params.memoryAudience.agentId) {
+        throw new Error("Memory audience belongs to a different agent");
+      }
+    }
+  };
+  assertAudienceCurrent();
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
     sessionKey,
@@ -335,12 +356,76 @@ async function resolveBootstrapFiles(
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);
   }
+  // These per-turn records never enter the shared bootstrap cache. The host
+  // audience supplies every address, including participants who have not spoken.
+  const scopedFiles: WorkspaceBootstrapFile[] = [];
+  const artifacts = params.memoryAudience?.context?.artifacts ?? [];
+  const layers = ["thread", "channel", "users"] as const;
+  if (params.contextMode !== "lightweight") {
+    for (const layer of layers) {
+      for (const artifact of artifacts.filter((item) => item.layer === layer)) {
+        const file: WorkspaceBootstrapFile = {
+          name: DEFAULT_MEMORY_FILENAME,
+          path: path.resolve(params.workspaceDir, artifact.relativePath),
+          missing: false,
+        };
+        if (!filterBootstrapFilesForSession([file], session).length) {
+          continue;
+        }
+        assertAudienceCurrent();
+        const loaded = await readWorkspaceFileWithGuards({
+          filePath: file.path,
+          workspaceDir: params.workspaceDir,
+          rejectAliases: true,
+          useCache: false,
+        });
+        assertAudienceCurrent();
+        if (!loaded.ok) {
+          if (!isRootFileMissingFailure(loaded)) {
+            params.warn?.(`Scoped memory could not be read safely: ${artifact.relativePath}`);
+          }
+          continue;
+        }
+        file.content = loaded.content;
+        setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
+        scopedFiles.push(file);
+      }
+    }
+  }
+  rawFiles.push(...scopedFiles);
   const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
     files: rawFiles,
     workspaceDir: params.workspaceDir,
     config: params.config,
     agentId: params.agentId,
     warn: params.warn,
+  });
+  assertAudienceCurrent();
+  // Classify complete sources before adding labels or limiting their prompt copy.
+  const eligibleScopedFiles = scopedFiles.filter(
+    (file) => !ineligibleAutomaticMemoryFiles.includes(file),
+  );
+  for (const file of eligibleScopedFiles) {
+    const artifact = artifacts.find(
+      (item) => path.resolve(params.workspaceDir, item.relativePath) === file.path,
+    );
+    if (artifact?.userName) {
+      file.content = `Current User memory for ${JSON.stringify(artifact.userName)}:\n\n${file.content ?? ""}`;
+    }
+  }
+  const boundedScopedFiles = new Map(
+    buildBootstrapContextForFiles(eligibleScopedFiles, params).map((file) => [
+      file.path,
+      file.content,
+    ]),
+  );
+  const scopedSnapshots = eligibleScopedFiles.flatMap((file) => {
+    const content = boundedScopedFiles.get(file.path);
+    if (content === undefined) {
+      return [];
+    }
+    file.content = content;
+    return [{ file, snapshot: { ...file } }];
   });
   const rootMemoryFile = rawFiles.find(
     (file) => file.name === DEFAULT_MEMORY_FILENAME && !file.missing,
@@ -364,7 +449,12 @@ async function resolveBootstrapFiles(
     params.workspaceDir,
   );
   // Heartbeat scratch is runner-owned; all lightweight runs omit bootstrap context.
-  const bootstrapFiles = params.contextMode === "lightweight" ? [] : sessionFiles;
+  const bootstrapFiles =
+    params.contextMode === "lightweight"
+      ? []
+      : sessionFiles.filter(
+          (file) => !scopedFiles.includes(file) || boundedScopedFiles.has(file.path),
+        );
 
   const hooked =
     hooks === "registered"
@@ -390,7 +480,31 @@ async function resolveBootstrapFiles(
   if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
     throw new Error("Workspace access changed while preparing bootstrap context");
   }
-  return sanitizeBootstrapFiles(filteredUpdated, params.workspaceDir, params.warn);
+  assertAudienceCurrent();
+  const workspaceRoot = resolveUserPath(params.workspaceDir);
+  const isScopedSource = (relativePath: string | undefined) =>
+    relativePath?.startsWith("memory/") && relativePath !== WORKSPACE_MEMORY_RELATIVE_PATH;
+  const audienceFiltered = filteredUpdated.flatMap((file) => {
+    const filePath = normalizeOptionalString(file.path);
+    const relativePath = filePath
+      ? path
+          .relative(workspaceRoot, resolveWorkspaceBootstrapPath(workspaceRoot, filePath))
+          .replaceAll(path.sep, "/")
+      : undefined;
+    const sourcePath = getWorkspaceFileSourceRelativePath(file);
+    if (!isScopedSource(relativePath) && !isScopedSource(sourcePath)) {
+      return [file];
+    }
+    const admitted = scopedSnapshots.find(
+      (entry) =>
+        entry.snapshot.path === resolveWorkspaceBootstrapPath(workspaceRoot, filePath ?? "") &&
+        workspaceFilesShareSourceIdentity(file, entry.file),
+    );
+    // A hook-created record, alias, relabel, or omitted source cannot replace
+    // the exact authorized snapshot captured by the guarded loader.
+    return admitted && sourcePath === relativePath ? [admitted.snapshot] : [];
+  });
+  return sanitizeBootstrapFiles(audienceFiltered, params.workspaceDir, params.warn);
 }
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */

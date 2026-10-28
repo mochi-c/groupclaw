@@ -10,6 +10,7 @@ import {
   type RoutePeer,
   resolveAgentIdFromSessionKey,
 } from "openclaw/plugin-sdk/routing";
+import { resolveDiscordChannelConfigByNativeId } from "../group-policy.js";
 
 export function buildDiscordRoutePeer(params: {
   isDirectMessage: boolean;
@@ -53,6 +54,13 @@ export function resolveDiscordConversationRoute(params: {
   peer: RoutePeer;
   parentConversationId?: string | null;
 }): ResolvedAgentRoute {
+  const launchChannel =
+    params.peer.kind === "channel" &&
+    resolveDiscordChannelConfigByNativeId({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      channelId: params.parentConversationId || params.peer.id,
+    })?.threadMode === "always";
   const input = {
     cfg: params.cfg,
     channel: "discord",
@@ -60,6 +68,7 @@ export function resolveDiscordConversationRoute(params: {
     guildId: params.guildId ?? undefined,
     memberRoleIds: params.memberRoleIds,
     peer: params.peer,
+    ...(launchChannel ? { groupScope: "per-group" as const } : {}),
     parentPeer: params.parentConversationId
       ? { kind: "channel" as const, id: params.parentConversationId }
       : undefined,

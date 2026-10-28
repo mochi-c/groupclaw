@@ -319,8 +319,8 @@ export function buildTtsSystemPromptHint(
       : undefined,
     `Keep spoken text ≤${settings.maxLength} chars to avoid auto-summary (summary ${settings.summarize ? "on" : "off"}).`,
     structured
-      ? "If workspace context (especially MEMORY.md) tells you not to use TTS or to use a local voice workflow, follow that workspace instruction instead."
-      : "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
+      ? "If workspace context (especially memory/MEMORY.md) tells you not to use TTS or to use a local voice workflow, follow that workspace instruction instead."
+      : "If workspace context (especially memory/MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
     structured
       ? "Use message(action=send) with voiceText and optional voiceProvider/voiceId."
       : "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",

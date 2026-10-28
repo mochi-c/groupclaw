@@ -12,6 +12,7 @@ export const DREAMING_SESSION_INGESTION_FILES_NAMESPACE = "dreaming-session-inge
 export const DREAMING_SESSION_INGESTION_SEEN_NAMESPACE = "dreaming-session-ingestion-seen";
 export const SESSION_BACKFILL_REWIND_NAMESPACE = "session-backfill-rewind";
 export const DREAMING_MEMORY_BACKUP_NAMESPACE = "dreaming-memory-backups";
+export const DREAMING_FRAGMENT_NAMESPACE = "dreaming-fragments";
 export const SHORT_TERM_RECALL_NAMESPACE = "short-term-recall";
 export const SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "short-term-phase-signals";
 export const SHORT_TERM_META_NAMESPACE = "short-term-meta";
@@ -86,6 +87,7 @@ function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<Workspa
   return openMemoryCoreStateStore<WorkspaceValue<T>>({
     namespace,
     maxEntries: DREAMING_WORKSPACE_STATE_MAX_ENTRIES,
+    overflowPolicy: "reject-new",
   });
 }
 
@@ -151,6 +153,16 @@ export async function writeMemoryCoreWorkspaceEntries<T>(
       }
     }
   }
+}
+
+// Caller owns typed encoding for values written to plugin state.
+export async function readMemoryCoreWorkspaceEntry<T>(
+  params: MemoryCoreWorkspaceParams & { key: string },
+): Promise<T | undefined> {
+  const entry = await openWorkspaceStore<T>(params.namespace).lookup(
+    memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
+  );
+  return entry?.value;
 }
 
 // Caller owns typed encoding for values written to plugin state.

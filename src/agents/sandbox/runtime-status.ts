@@ -56,6 +56,8 @@ type SandboxRuntimeStatusParams = {
   /** Independent execution identity used for sandbox mode and policy classification. */
   classificationSessionKey?: string;
   classificationAgentId?: string;
+  /** Host-prepared requirement; configured mode and workspace grants cannot relax it. */
+  requireIsolatedWorkspace?: boolean;
   /** Trusted canonical candidate for the classification identity; null means no stored entry. */
   preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
 };
@@ -204,6 +206,7 @@ function resolveSandboxRuntimeStatusForClassification(
   mode: SandboxConfig["mode"];
   sandboxed: boolean;
   toolPolicy: SandboxToolPolicyResolved;
+  isolatedWorkspace?: true;
 } & SandboxRuntimeIsolation {
   const {
     sessionKey,
@@ -232,16 +235,22 @@ function resolveSandboxRuntimeStatusForClassification(
             { readOnly: true },
           )
         : undefined;
-  const sandboxRequired = session?.existing?.sandbox === "required";
+  const isolatedWorkspace = params.requireIsolatedWorkspace === true;
+  const sandboxRequired = isolatedWorkspace || session?.existing?.sandbox === "required";
   const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
     ? {
         sandboxRequired: true,
-        createdActor: session.existing?.createdActor,
-        isolationSubject: profileId
-          ? { kind: "profile", profileId }
-          : { kind: "session", sessionKey: session.normalizedKey },
-        workspaceAccess: sandboxCfg.workspaceAccess === "rw" ? "ro" : sandboxCfg.workspaceAccess,
+        createdActor: session?.existing?.createdActor,
+        isolationSubject:
+          profileId && !isolatedWorkspace
+            ? { kind: "profile", profileId }
+            : { kind: "session", sessionKey: session?.normalizedKey ?? comparableSessionKey },
+        workspaceAccess: isolatedWorkspace
+          ? "none"
+          : sandboxCfg.workspaceAccess === "rw"
+            ? "ro"
+            : sandboxCfg.workspaceAccess,
       }
     : { sandboxRequired: false };
   const sandboxed =
@@ -258,6 +267,7 @@ function resolveSandboxRuntimeStatusForClassification(
     mainSessionKey,
     mode: sandboxCfg.mode,
     ...isolation,
+    ...(isolatedWorkspace ? { isolatedWorkspace: true as const } : {}),
     sandboxed,
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, classificationAgentId),
   };

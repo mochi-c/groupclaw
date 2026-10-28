@@ -1,8 +1,13 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isCuratedMemoryRelativePath,
+  WORKSPACE_MEMORY_RELATIVE_PATH,
+} from "../../memory/scoped-memory.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
@@ -462,11 +467,48 @@ export function buildBootstrapContextForFiles(
     config?: OpenClawConfig;
     agentId?: string | null;
     warn?: (message: string) => void;
+    workspaceDir?: string;
   },
 ): EmbeddedContextFile[] {
-  return buildBootstrapContextFiles(bootstrapFiles, {
-    maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
-    warn: params.warn,
-  });
+  const scopedPaths = new Map<WorkspaceBootstrapFile, string>();
+  if (params.workspaceDir) {
+    for (const file of bootstrapFiles) {
+      const relativePath = path
+        .relative(path.resolve(params.workspaceDir), path.resolve(params.workspaceDir, file.path))
+        .replaceAll(path.sep, "/");
+      if (
+        relativePath !== WORKSPACE_MEMORY_RELATIVE_PATH &&
+        isCuratedMemoryRelativePath(relativePath)
+      ) {
+        scopedPaths.set(file, relativePath);
+      }
+    }
+  }
+  const contextFiles = buildBootstrapContextFiles(
+    bootstrapFiles.filter((file) => !scopedPaths.has(file)),
+    {
+      maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
+      totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+      warn: params.warn,
+    },
+  );
+  // Scoped summaries have their own bounded pool so project rules and large
+  // participant profiles cannot displace the current conversation.
+  let remainingChars = 12_000;
+  for (const [file, relativePath] of scopedPaths) {
+    if (remainingChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
+      params.warn?.("Scoped memory bootstrap budget exhausted; read remaining memory explicitly.");
+      break;
+    }
+    const files = buildBootstrapContextFiles([{ ...file, name: relativePath }], {
+      maxChars: relativePath.startsWith("memory/User/") ? 1_000 : 2_000,
+      totalMaxChars: remainingChars,
+      warn: params.warn,
+    });
+    for (const contextFile of files) {
+      remainingChars -= contextFile.content.length;
+      contextFiles.push(contextFile);
+    }
+  }
+  return contextFiles;
 }

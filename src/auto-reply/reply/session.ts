@@ -54,10 +54,6 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  forgetActiveSessionForShutdown,
-  noteActiveSessionForShutdown,
-} from "../../gateway/active-sessions-shutdown-tracker.js";
-import {
   captureSessionMemoryTranscript,
   type SessionMemoryTranscript,
 } from "../../hooks/bundled/session-memory/capture.js";
@@ -128,8 +124,7 @@ import {
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import {
   createReplySessionResetBoundary,
-  emitReplySessionEndHook,
-  emitReplySessionStartHook,
+  emitReplySessionLifecycleHooks,
   resolveExplicitSessionEndReason,
 } from "./session-hooks.js";
 import {
@@ -1094,7 +1089,7 @@ async function initSessionStateAttemptLocked(
   if (previousSessionEntry?.sessionId) {
     emitSessionAutoResetHook({
       cfg,
-      sessionId: previousSessionEntry.sessionId,
+      sessionEntry: previousSessionEntry,
       sessionKey,
       reason: previousSessionEndReason,
       nextSessionId: sessionId,
@@ -1142,50 +1137,17 @@ async function initSessionStateAttemptLocked(
     IsNewSession: isFirstSessionTurn ? "true" : "false",
   };
 
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner && isFirstSessionTurn) {
-    const effectiveSessionId = sessionId;
-    if (previousSessionEntry?.sessionId) {
-      // The shutdown finalizer must not re-fire session_end for a session
-      // that is being replaced here; forget unconditionally so the next drain
-      // skips this id even when no `session_end` plugin is currently attached.
-      forgetActiveSessionForShutdown(previousSessionEntry.sessionId);
-      if (hookRunner.hasHooks("session_end")) {
-        emitReplySessionEndHook({
-          hookRunner,
-          sessionId: previousSessionEntry.sessionId,
-          sessionKey,
-          agentId,
-          storePath,
-          reason: previousSessionEndReason,
-          nextSessionId: effectiveSessionId,
-          resetBoundaryId: resetBoundary?.boundaryId,
-        });
-      }
-    }
-
-    if (effectiveSessionId) {
-      // Track the new session so the shutdown finalizer fires a typed
-      // session_end with reason="shutdown"/"restart" if the gateway stops
-      // while this session is still active (see #57790).
-      noteActiveSessionForShutdown({
-        cfg,
-        sessionKey,
-        sessionId: effectiveSessionId,
-        storePath,
-        sessionFile: sessionKey,
-        agentId,
-      });
-    }
-    if (hookRunner.hasHooks("session_start")) {
-      emitReplySessionStartHook(hookRunner, {
-        sessionId: effectiveSessionId,
-        sessionKey,
-        agentId,
-        resumedFrom: previousSessionEntry?.sessionId,
-      });
-    }
-  }
+  emitReplySessionLifecycleHooks({
+    cfg,
+    sessionId,
+    sessionKey,
+    agentId,
+    storePath,
+    isFirstSessionTurn,
+    previousSessionEntry,
+    previousSessionEndReason,
+    resetBoundaryId: resetBoundary?.boundaryId,
+  });
 
   return {
     kind: "complete",

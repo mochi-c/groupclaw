@@ -315,6 +315,8 @@ the provider's own awaited work.
 
     Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `resolveSessionStoreBackupPaths(...)` before mutating a store. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
 
+    Thread lifecycle owners can pass `lifecycle: { cfg, reason: "thread-closed" }` to `deleteSessionEntry`. After a successful deletion, the host emits `session:closed` with the committed deleted entry and retained transcript archive identities. The bundled session-memory hook saves a scoped `thread.closed` Event only when that entry has canonical Thread identity. Rejected or repeated deletions emit no closure Event. The event snapshot records evidence; it does not grant access to archived content.
+
     `resolveStorePath(...)` and `updateSessionStoreEntry(...)` round out the session helpers: `resolveStorePath` resolves the session store path for a given scope, and `updateSessionStoreEntry({ storePath, sessionKey, update })` patches one entry directly by store path when the caller already knows it.
 
     `loadTranscriptEventsSync(...)` is available for synchronous doctor and repair paths that cannot use the async transcript runtime. It returns raw `SessionStoreTranscriptEvent` records and does not consult runtime `session.store`; pass `storePath` for a non-default store. Normal plugin runtime code should prefer `openclaw/plugin-sdk/session-transcript-runtime`.

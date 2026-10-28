@@ -37,15 +37,24 @@ export function registerWorkspaceBootstrapTests() {
       expect(memoryEntries[0]?.content).toBe(content);
     };
 
-    it("includes MEMORY.md when present", async () => {
+    it("includes memory/MEMORY.md when present", async () => {
       const tempDir = await makeTempWorkspace("openclaw-workspace-");
-      await writeWorkspaceFile({ dir: tempDir, name: "MEMORY.md", content: "memory" });
+      await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_MEMORY_FILENAME, content: "memory" });
 
       const files = await loadWorkspaceBootstrapFiles(tempDir);
       expectSingleMemoryEntry(files, "memory");
     });
 
-    it("ignores lowercase memory.md when MEMORY.md is absent", async () => {
+    it("reads legacy root MEMORY.md until Doctor migrates it", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-");
+      await writeWorkspaceFile({ dir: tempDir, name: "MEMORY.md", content: "legacy" });
+
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expectSingleMemoryEntry(files, "legacy");
+      expect(getMemoryEntries(files)[0]?.path).toBe(path.join(tempDir, "MEMORY.md"));
+    });
+
+    it("ignores lowercase memory.md when canonical memory is absent", async () => {
       const tempDir = await makeTempWorkspace("openclaw-workspace-");
       await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "alt" });
 
@@ -241,7 +250,12 @@ export function registerWorkspaceBootstrapTests() {
       { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },
       { name: "USER.md", path: "/w/USER.md", content: "", missing: false },
       { name: "BOOTSTRAP.md", path: "/w/BOOTSTRAP.md", content: "", missing: false },
-      { name: "MEMORY.md", path: "/w/MEMORY.md", content: "", missing: false },
+      {
+        name: DEFAULT_MEMORY_FILENAME,
+        path: `/w/${DEFAULT_MEMORY_FILENAME}`,
+        content: "",
+        missing: false,
+      },
     ];
 
     it("returns all files for main session (no sessionKey)", () => {

@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
 import * as immutable from "../infra/update-immutable-install.js";
@@ -5,6 +6,7 @@ import * as retainedRuntime from "../infra/update-retained-runtime.js";
 import * as recoveryAdmission from "../infra/update-run-recovery-admission.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import * as stateOwnership from "../state/openclaw-state-ownership.js";
+import { registerUpdateCli } from "./update-cli.js";
 import * as shared from "./update-cli/shared.js";
 import { updateFinalizeCommand } from "./update-cli/update-command-finalize.js";
 import { updateCommand } from "./update-cli/update-command.js";
@@ -14,10 +16,16 @@ const activation = vi.hoisted(() => ({
   activate:
     vi.fn<typeof import("../infra/update-immutable-activation.js").activateImmutableUpdate>(),
   recover: vi.fn<typeof import("../infra/update-immutable-activation.js").recoverImmutableUpdate>(),
+  cleanup:
+    vi.fn<typeof import("../infra/update-immutable-cleanup.js").cleanupImmutableGenerations>(),
 }));
 vi.mock("../infra/update-immutable-activation.js", () => ({
   activateImmutableUpdate: activation.activate,
   recoverImmutableUpdate: activation.recover,
+}));
+// mock-isolation: Exercise CLI outcomes without retiring real installation generations.
+vi.mock("../infra/update-immutable-cleanup.js", () => ({
+  cleanupImmutableGenerations: activation.cleanup,
 }));
 
 const installation: UpdateImmutableInstall = {
@@ -46,6 +54,12 @@ beforeEach(() => {
   activation.recover
     .mockReset()
     .mockResolvedValue({ status: "succeeded", installation: committedInstallation });
+  activation.cleanup.mockReset().mockResolvedValue({
+    status: "completed",
+    removed: [],
+    eligible: [],
+    warnings: [],
+  });
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(installation.currentPath);
   vi.spyOn(immutable, "inspectImmutableInstall").mockResolvedValue(installation);
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -180,6 +194,7 @@ it.each([
     drainTimeout: "30",
   });
   expect(activation.activate).toHaveBeenCalledTimes(entry.activates ? 1 : 0);
+  expect(activation.cleanup).toHaveBeenCalledTimes(entry.activates ? 1 : 0);
   if (entry.activates) {
     expect(activation.activate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -198,6 +213,59 @@ it.each([
     }),
   );
   expect(retainedRuntime.withRetainedUpdateRuntime).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "routes generation cleanup through its CLI leaf (dry-run=%s)",
+  async (dryRun) => {
+    const prepare = vi.spyOn(immutable, "prepareImmutableUpdate");
+    const program = new Command();
+    registerUpdateCli(program);
+    await program.parseAsync(
+      [
+        "update",
+        "cleanup-generations",
+        "--root",
+        installation.root,
+        "--json",
+        ...(dryRun ? ["--dry-run"] : []),
+      ],
+      { from: "user" },
+    );
+    expect(activation.cleanup).toHaveBeenCalledWith({
+      root: installation.root,
+      json: true,
+      dryRun,
+    });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed", installKind: "immutable" }),
+    );
+    expect(prepare).not.toHaveBeenCalled();
+    expect(activation.activate).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps a verified activation successful when generation cleanup refuses", async () => {
+  vi.mocked(immutable.inspectImmutableInstall).mockResolvedValue({
+    ...installation,
+    activationEnabled: true,
+  });
+  vi.spyOn(immutable, "prepareImmutableUpdate").mockResolvedValue({
+    status: "prepared",
+    installation: { ...installation, prepared: preparedReceipt },
+    targetSha,
+    steps: [],
+    warnings: [],
+  });
+  activation.cleanup.mockRejectedValue(new Error("unverified host references"));
+  await updateCommand({ json: true });
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "succeeded",
+      warnings: [expect.stringContaining("Generation cleanup deferred")],
+      installation: committedInstallation,
+    }),
+  );
 });
 
 it.each([false, true])(

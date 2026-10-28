@@ -65,9 +65,7 @@ export function collectTranscriptWrites(params: {
       }
       const relativePath = path.relative(params.workspaceDir, absolutePath).replaceAll("\\", "/");
       if (
-        (relativePath === "MEMORY.md" ||
-          relativePath === "USER.md" ||
-          relativePath.startsWith("memory/")) &&
+        (relativePath === "USER.md" || relativePath.startsWith("memory/")) &&
         !params.writes.has(relativePath)
       ) {
         params.writes.set(relativePath, { relativePath, observedAt: params.observedAt });

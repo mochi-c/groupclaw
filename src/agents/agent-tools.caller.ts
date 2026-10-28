@@ -1,3 +1,7 @@
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+} from "../plugins/memory-audience.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -23,7 +27,13 @@ export function createCodingToolsGatewayCaller(params: {
           agentId,
           sessionKey: sessionKey.trim(),
           // The existing source fence rechecks this after tool preparation and at final I/O.
-          receiptAuthority: settleBatch?.isCurrent,
+          receiptAuthority: () => {
+            if (options.memoryAudience) {
+              assertMemoryAudienceSession(options.memoryAudience, sessionKey);
+              assertMemoryAudienceCurrent(options.memoryAudience);
+            }
+            return settleBatch?.isCurrent?.() ?? true;
+          },
           receiptAdmissions: settleBatch?.receiptAdmission
             ? [settleBatch.receiptAdmission]
             : undefined,

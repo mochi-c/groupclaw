@@ -3,6 +3,7 @@ import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import {
@@ -28,6 +29,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
+  sessionEntry?: SessionEntry;
   storePath: string;
   sessionFile?: string;
   agentId: string;
@@ -80,7 +82,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   if (shouldEmitAutoReset) {
     emitSessionAutoResetHook({
       cfg: params.cfg,
-      sessionId: params.sessionId,
+      sessionEntry: params.sessionEntry ?? { sessionId: params.sessionId },
       sessionKey: params.sessionKey,
       reason: params.reason,
       sessionFile: transcript.sessionFile,
@@ -118,6 +120,7 @@ export function emitGatewaySessionEndPluginHook(params: {
     transcriptArchived: transcript.transcriptArchived,
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
+    sessionEntry: params.sessionEntry,
     endedTranscript,
   });
   void runWithGatewayDetachedWorkContinuation(async () => {

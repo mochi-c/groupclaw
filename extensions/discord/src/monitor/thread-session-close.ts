@@ -8,7 +8,7 @@ import {
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
- * Closes every session entry in the store whose key contains {@link threadId}.
+ * Closes the Discord conversation sessions routed to {@link threadId}.
  * The explicit lifecycle deletion archives the old transcript and guarantees
  * that a later inbound message starts a fresh session in every reset mode.
  */
@@ -23,19 +23,12 @@ export async function closeDiscordThreadSessions(params: {
     return 0;
   }
 
-  // Match when the threadId appears as a complete colon-separated segment.
-  // e.g. "999" must be followed by ":" (middle) or end-of-string (final).
-  // Using a regex avoids false-positives where one snowflake is a prefix of
-  // another (e.g. searching for "999" must not match ":99900").
-  //
-  // Session key shapes:
-  //   agent:<agentId>:discord:channel:<threadId>
-  //   agent:<agentId>:discord:channel:<parentId>:thread:<threadId>
-  const segmentRe = new RegExp(`:${normalizedThreadId}(?::|$)`, "i");
-
-  function sessionKeyContainsThreadId(key: string): boolean {
-    return segmentRe.test(key);
-  }
+  // Bind the conversation segment, not a member id or another channel's
+  // peer id. Native and parent-routed Threads have distinct key shapes.
+  const segmentRe = new RegExp(
+    `^agent:[^:]+:discord:channel:(?:${normalizedThreadId}|[^:]+:thread:${normalizedThreadId})(?::|$)`,
+    "i",
+  );
 
   // Session keys are agent-scoped (agent:<agentId>:discord:...), so the store
   // must resolve per routed agent — resolving with the channel account id
@@ -53,15 +46,17 @@ export async function closeDiscordThreadSessions(params: {
       storePath,
       readOnly: true,
     })) {
-      if (!sessionKeyContainsThreadId(sessionKey)) {
+      if (!segmentRe.test(sessionKey)) {
         continue;
       }
       const deleted = await deleteSessionEntry({
+        agentId,
         archiveTranscript: true,
         expectedSessionId: entry.sessionId ?? null,
         expectedUpdatedAt: entry.updatedAt,
         sessionKey,
         storePath,
+        lifecycle: { cfg, reason: "thread-closed" },
       });
       if (deleted) {
         resetCount += 1;

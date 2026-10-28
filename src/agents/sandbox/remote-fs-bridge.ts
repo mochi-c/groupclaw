@@ -53,6 +53,9 @@ export function createRemoteShellSandboxFsBridge(params: {
 }
 
 class RemoteShellSandboxFsBridge implements SandboxFsBridge {
+  get supportsMutationAuthority(): true | undefined {
+    return this.runtime.supportsCommandAuthority;
+  }
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
@@ -279,6 +282,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       stdin: buffer,
       allowFailure: kind === "create" ? true : undefined,
       signal: params.signal,
+      assertCurrent: params.assertBeforeMutation,
     });
     return { result, containerPath: target.containerPath };
   }
@@ -315,6 +319,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         pinned: { mountRootPath: pinned.mountRootPath, relativePath: pinned.relativeParentPath },
       }),
       signal: params.signal,
+      assertCurrent: params.assertBeforeMutation,
     });
   }
 
@@ -350,6 +355,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       }),
       signal: params.signal,
       allowFailure: params.force !== false,
+      assertCurrent: params.assertBeforeMutation,
     });
   }
 
@@ -687,7 +693,9 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     stdin?: Buffer | string;
     signal?: AbortSignal;
     allowFailure?: boolean;
+    assertCurrent?: () => void;
   }): Promise<SandboxBackendCommandResult> {
+    params.assertCurrent?.();
     return await this.runtime.runRemoteShellScript({
       script: [
         "set -eu",

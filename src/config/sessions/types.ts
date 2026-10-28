@@ -62,6 +62,10 @@ export type SessionOrigin = {
   from?: string;
   to?: string;
   nativeChannelId?: string;
+  /** Native parent of a threaded conversation; never inferred from display names or session keys. */
+  nativeParentChannelId?: string;
+  /** Transport-verified thread visibility; absence does not imply a public thread. */
+  nativeThreadVisibility?: "public" | "private";
   nativeDirectUserId?: string;
   avatar?: string;
   accountId?: string;

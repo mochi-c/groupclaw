@@ -14,7 +14,10 @@ import {
   isFileMissingError,
   type MemoryEntryOrigin,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  clearMemoryArtifactProvenance,
+  listMemoryArtifactProvenance,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
   borrowOpenClawAgentDatabase,
@@ -23,6 +26,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { readMemoryPreimages } from "./dreaming-consolidation-artifacts.js";
 import { DREAMS_FILENAMES } from "./dreaming-dreams-file.js";
+import { forgetDreamFragmentState, readDreamFragmentSources } from "./dreaming-fragment-state.js";
 import {
   readSessionIngestionState,
   writeSessionIngestionState,
@@ -197,6 +201,40 @@ async function forgetWorkspaceMemory(
   }
 
   const memoryRewrites: MemoryRewrite[] = [];
+  let changedEvent = false;
+  const eventSources = (await readDreamFragmentSources(workspaceDir)).filter(
+    (source) =>
+      source.kind === "event" &&
+      source.agentId === params.agentId &&
+      sessionIds.has(source.sessionId),
+  );
+  const eventPaths = new Set(eventSources.map((source) => source.relativePath));
+  for (const source of eventSources) {
+    const absolutePath = path.join(workspaceDir, source.relativePath);
+    const content = await readWorkspaceText(workspaceDir, absolutePath).catch((error: unknown) => {
+      if (isFileMissingError(error)) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (content === undefined) {
+      continue;
+    }
+    if (hashMemoryContent(content) !== source.hash) {
+      changedEvent = true;
+      refusals.push(
+        `Event ${source.relativePath} changed after capture; review it manually before retrying memory forget.`,
+      );
+      continue;
+    }
+    memoryRewrites.push({
+      absolutePath,
+      relativePath: source.relativePath,
+      expectedContent: content,
+      content: "",
+      remove: true,
+    });
+  }
   const scrub = (content: string) =>
     scrubMemoryContent({ content, entryKeys, sessionIds, corpusSnippets, agentId: params.agentId });
   let removedMemoryEntries = 0;
@@ -207,7 +245,10 @@ async function forgetWorkspaceMemory(
   );
   for (const absolutePath of memoryFiles) {
     // Corpus evidence must survive until every dependent artifact is clean.
-    if (path.dirname(absolutePath) === corpusDir) {
+    if (
+      path.dirname(absolutePath) === corpusDir ||
+      eventPaths.has(path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"))
+    ) {
       continue;
     }
     const content = await readWorkspaceText(workspaceDir, absolutePath);
@@ -359,7 +400,9 @@ async function forgetWorkspaceMemory(
       agentId: params.agentId,
       changedPaths,
       removedPaths: new Set(
-        corpusRewrites.filter((rewrite) => rewrite.remove).map((rewrite) => rewrite.relativePath),
+        [...memoryRewrites, ...corpusRewrites]
+          .filter((rewrite) => rewrite.remove)
+          .map((rewrite) => rewrite.relativePath),
       ),
       sessionIds,
       excludedSessionIds,
@@ -406,6 +449,9 @@ async function forgetWorkspaceMemory(
   };
   if (params.dryRun || sessionIds.size === 0) {
     return { kind: "complete", report };
+  }
+  if (changedEvent) {
+    throw new Error(refusals.join("\n"));
   }
 
   context.database ??= await withOpenClawAgentDatabaseWrite(context.databaseOptions, () =>
@@ -509,7 +555,17 @@ async function forgetWorkspaceMemory(
       conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
       content: rewrite.remove ? null : rewrite.content,
     });
+    if (rewrite.remove && eventPaths.has(rewrite.relativePath)) {
+      await clearMemoryArtifactProvenance({
+        workspaceDir,
+        relativePath: rewrite.relativePath,
+        contentBefore: rewrite.expectedContent,
+      });
+    }
   }
+  // Keep source receipts until all artifact writes succeed, so failure can
+  // retry exact Event deletion rather than losing its producer identity.
+  await forgetDreamFragmentState({ workspaceDir, agentId: params.agentId, sessionIds });
   await withMemoryForgetWorker(
     context.databaseOptions,
     db,

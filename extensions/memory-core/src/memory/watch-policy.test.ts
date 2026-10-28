@@ -25,7 +25,9 @@ it("observes root-entry links without following sources the indexer rejects", as
   await fs.mkdir(state.path("target"));
   await fs.writeFile(state.path("target", "note.md"), "trusted");
   await fs.symlink(state.path("target"), path.join(state.workspaceDir, "memory"), "junction");
-  await fs.symlink(state.path("target", "note.md"), path.join(state.workspaceDir, "MEMORY.md"));
+  // USER.md remains a workspace-root entry; curated MEMORY.md lives inside the
+  // observed memory tree and must not get a second, nested entry target.
+  await fs.symlink(state.path("target", "note.md"), path.join(state.workspaceDir, "USER.md"));
   await fs.symlink(state.path("target"), state.path("extra-link"), "junction");
   const owner = policy([state.path("extra-link")]);
   const groups = await owner.observations(signal());
@@ -43,13 +45,17 @@ it("observes root-entry links without following sources the indexer rejects", as
         scope: expect.objectContaining({ kind: "entry" }),
       }),
       expect.objectContaining({
-        path: path.join(state.workspaceDir, "MEMORY.md"),
+        path: path.join(state.workspaceDir, "USER.md"),
         alias: true,
         scope: expect.objectContaining({ kind: "entry" }),
       }),
       expect.objectContaining({ path: state.path("extra-link"), alias: true, core: false }),
     ]),
   );
+  // The canonical curated entry is covered by the memory tree, which is selected once.
+  expect(
+    selected.filter((selection) => selection.path === path.join(state.workspaceDir, "memory")),
+  ).toHaveLength(1);
   expect(selected.every((selection) => !selection.path.startsWith(state.path("target")))).toBe(
     true,
   );

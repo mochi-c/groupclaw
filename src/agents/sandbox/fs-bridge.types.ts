@@ -22,6 +22,8 @@ export type SandboxFsStat = {
 
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
+  /** Every mutation forwards caller authority to final backend admission. */
+  readonly supportsMutationAuthority?: true;
   /**
    * Backend-owned runtime roots and their local policy projections, in mount
    * precedence order for equal roots. These do not grant access: bridge methods
@@ -113,6 +115,8 @@ export type SandboxFsBridge = {
     /** Pre-authorized canonical mutation target from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
+    /** Rechecked after awaited preparation, immediately before the mutation. */
+    assertBeforeMutation?: () => void;
   }): Promise<void>;
   /**
    * Atomically creates a file only when no entry already exists at the path.
@@ -128,6 +132,7 @@ export type SandboxFsBridge = {
     /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
+    assertBeforeMutation?: () => void;
   }): Promise<void>;
   remove(params: {
     filePath: string;
@@ -137,6 +142,7 @@ export type SandboxFsBridge = {
     /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
+    assertBeforeMutation?: () => void;
   }): Promise<void>;
   rename(params: { from: string; to: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
   stat(params: {

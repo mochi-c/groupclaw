@@ -156,7 +156,10 @@ describe("Gateway Active Memory", () => {
                     call_id: "call_memory_get",
                     // The default recall surface dispatches the configured memory tool through discovery.
                     name: "tool_call",
-                    arguments: JSON.stringify({ id: "memory_get", args: { path: "MEMORY.md" } }),
+                    arguments: JSON.stringify({
+                      id: "memory_get",
+                      args: { path: "memory/MEMORY.md" },
+                    }),
                     status: "completed",
                   });
                 } else {
@@ -203,9 +206,13 @@ describe("Gateway Active Memory", () => {
             );
           });
           providerServer = server;
-          await fs.mkdir(workspace, { recursive: true });
+          await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
           signal.throwIfAborted();
-          await fs.writeFile(path.join(workspace, "MEMORY.md"), `${memoryFact}\n`, "utf8");
+          await fs.writeFile(
+            path.join(workspace, "memory", "MEMORY.md"),
+            `${memoryFact}\n`,
+            "utf8",
+          );
           signal.throwIfAborted();
           phase = "starting mock provider";
           await new Promise<void>((resolve, reject) => {

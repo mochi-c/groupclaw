@@ -1313,7 +1313,7 @@ describe("dreaming service reconciliation", () => {
       await fs.mkdir(path.dirname(path.join(workspaceDir, sourcePath)), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, sourcePath), snippets.join("\n"));
       const originalMemory = "# Long-Term Memory\n\nKeep this existing preference.\n";
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), originalMemory);
+      await fs.writeFile(path.join(workspaceDir, "memory", "MEMORY.md"), originalMemory);
       await recordShortTermRecalls({
         workspaceDir,
         query: "private synthetic query",
@@ -1381,7 +1381,7 @@ describe("dreaming service reconciliation", () => {
         expect(report).not.toContain(privateValue);
       }
       expect(report).not.toMatch(/score=|threshold|sessionKind|originClass/);
-      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
       if (promoted === 0) {
         expect(memory).toBe(originalMemory);
       } else {

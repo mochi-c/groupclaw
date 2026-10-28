@@ -1,7 +1,12 @@
 // Memory Core plugin module implements the synchronous sqlite-vec KNN query body.
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import { buildMemoryModelFilter, type MemorySearchRow } from "./manager-search-shared.js";
+import {
+  buildMemoryModelFilter,
+  buildMemoryPathFilter,
+  type MemoryPathFilter,
+  type MemorySearchRow,
+} from "./manager-search-shared.js";
 import { vectorToBlob } from "./vector-blob.js";
 
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
@@ -19,6 +24,7 @@ export type VectorKnnRequest = {
   limit: number;
   snippetMaxChars: number;
   sourceFilter: { sql: string; params: string[] };
+  memoryPathFilter?: MemoryPathFilter;
 };
 
 export type VectorKnnResponse = {
@@ -101,6 +107,7 @@ export function runVectorKnnQuery(
 ): VectorKnnResponse {
   validateVectorKnnRequest(request);
   const vectorModelFilter = buildMemoryModelFilter("c.model", request.providerModels);
+  const pathFilter = buildMemoryPathFilter(request.memoryPathFilter, "c");
   const qBlob = vectorToBlob(request.queryVec);
   const snippetByteLimit = request.snippetMaxChars * 4;
   const runVectorQuery = (candidateLimit: number) => {
@@ -119,7 +126,7 @@ export function runVectorKnnQuery(
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
           `  FROM ${request.vectorTable} v\n` +
           `  CROSS JOIN memory_index_chunks c ON c.id = v.id\n` +
-          ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${request.sourceFilter.sql}\n` +
+          ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${request.sourceFilter.sql}${pathFilter.sql}\n` +
           ` ORDER BY dist ASC\n` +
           ` LIMIT ?`,
       )
@@ -132,6 +139,7 @@ export function runVectorKnnQuery(
         candidateLimit,
         ...request.providerModels,
         ...request.sourceFilter.params,
+        ...pathFilter.params,
         request.limit,
       );
     return queryRows.map((row) => {
@@ -150,10 +158,15 @@ export function runVectorKnnQuery(
     const matchingChunkCountRow = db
       .prepare(
         `SELECT COUNT(*) AS count FROM (\n` +
-          `  SELECT 1 FROM memory_index_chunks c WHERE ${vectorModelFilter}${request.sourceFilter.sql} LIMIT ?\n` +
+          `  SELECT 1 FROM memory_index_chunks c WHERE ${vectorModelFilter}${request.sourceFilter.sql}${pathFilter.sql} LIMIT ?\n` +
           `)`,
       )
-      .get(...request.providerModels, ...request.sourceFilter.params, request.limit);
+      .get(
+        ...request.providerModels,
+        ...request.sourceFilter.params,
+        ...pathFilter.params,
+        request.limit,
+      );
     const matchingChunkCount = readCount(matchingChunkCountRow);
     if (matchingChunkCount > rows.length) {
       const vectorCountRow = db

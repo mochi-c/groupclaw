@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -13,10 +12,12 @@ import { resolveUserTimezone } from "../../../agents/date-time.js";
 import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
-import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { createMemoryEvent } from "../../../memory/memory-events.js";
+import { resolveMemoryEventScopeFromEntry } from "../../../memory/session-memory-context.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import {
   isIncognitoSessionKey,
@@ -45,7 +46,6 @@ function formatLocalSessionTimestamp(
 ): {
   date: string;
   time: string;
-  timeSlug: string;
 } {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -67,30 +67,7 @@ function formatLocalSessionTimestamp(
   return {
     date: `${year}-${month}-${day}`,
     time: `${hour}:${minute}:${second}`,
-    timeSlug: `${hour}${minute}`,
   };
-}
-
-async function resolveAvailableMemoryFilename(params: {
-  memoryDir: string;
-  dateStr: string;
-  slug: string;
-}): Promise<string> {
-  const basename = `${params.dateStr}-${params.slug}`;
-  let suffix = 1;
-
-  while (true) {
-    const filename = suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
-    try {
-      await fs.access(path.join(params.memoryDir, filename));
-      suffix += 1;
-    } catch (err) {
-      if ((err as { code?: string }).code === "ENOENT") {
-        return filename;
-      }
-      throw err;
-    }
-  }
 }
 
 function resolveDisplaySessionKey(params: {
@@ -147,9 +124,6 @@ async function saveSessionMemoryNow(
       workspaceDir: contextWorkspaceDir,
       sessionKey: event.sessionKey,
     });
-    const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
-
     // Session-memory artifacts share the same configured user-day boundary as daily memory files.
     const now = new Date(event.timestamp);
     const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
@@ -160,11 +134,30 @@ async function saveSessionMemoryNow(
     // events already identify the ended session as sessionEntry.
     const sessionEntry = (
       event.type === "command"
-        ? context.previousSessionEntry || context.sessionEntry || {}
-        : context.sessionEntry || {}
-    ) as Record<string, unknown>;
-    const currentSessionId = normalizeOptionalString(sessionEntry.sessionId);
-
+        ? (context.previousSessionEntry ?? context.sessionEntry)
+        : context.sessionEntry
+    ) as SessionEntry | undefined;
+    const flush = event.action === "memory-flush" ? context.memoryFlush : undefined;
+    const scope = flush
+      ? context.memoryEventScope
+      : resolveMemoryEventScopeFromEntry(sessionEntry, event.sessionKey, cfg ?? {});
+    if (!scope) {
+      log.debug("Session Event excluded by launch Channel memory policy");
+      return;
+    }
+    if (event.action === "closed" && scope.kind !== "thread") {
+      throw new Error("Thread closure Event requires canonical Thread identity");
+    }
+    const currentSessionId = normalizeOptionalString(sessionEntry?.sessionId);
+    const eventType = flush
+      ? "memory.pre-compaction-flush"
+      : event.type === "command"
+        ? "session.reset"
+        : event.action === "compacted"
+          ? "session.compacted"
+          : event.action === "closed"
+            ? "thread.closed"
+            : "session.rollover";
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
       hasCfg: Boolean(cfg),
@@ -196,21 +189,9 @@ async function saveSessionMemoryNow(
       }
     }
 
-    if (!slug) {
-      slug = localTimestamp.timeSlug;
-      log.debug("Using fallback timestamp slug", { slug });
-    }
-
-    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
-    const memoryFilePath = path.join(memoryDir, filename);
-    log.debug("Memory file path resolved", {
-      filename,
-      path: shortenHomePath(memoryFilePath),
-    });
-
     const timeStr = localTimestamp.time;
 
-    const sessionId = (sessionEntry.sessionId as string) || "unknown";
+    const sessionId = currentSessionId || "unknown";
     const boundaryDetail =
       event.type === "session"
         ? `- **Reason**: ${(context.reason as string) || "unknown"}`
@@ -236,11 +217,8 @@ async function saveSessionMemoryNow(
       );
     }
 
-    const entry = entryParts.join("\n");
-
     // Reserve provenance before exposing the file. A restricted projection
     // must never fall back to an untracked artifact that later reads as trusted.
-    const memoryRoot = await root(memoryDir);
     const provenanceObserver = createMemoryWriteProvenanceObserver({
       mutationRoot: workspaceDir,
       workspaceDir,
@@ -250,16 +228,65 @@ async function saveSessionMemoryNow(
       sessionKey: event.sessionKey,
       now: () => now.getTime(),
     });
-    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
-    await provenanceObserver.write({
-      absolutePath: memoryFilePath,
-      contentBefore: "",
-      contentAfter: entry,
-      commit,
+    const handle = await createMemoryEvent({
+      workspaceDir,
+      scope,
+      eventType,
+      createdAt: now,
+      createdDate: dateStr,
+      slug,
+      status:
+        flush && !flush.outcome
+          ? "processing"
+          : flush?.outcome === "failed" || flush?.outcome === "exhausted"
+            ? "failed"
+            : "completed",
+      outcome: flush?.outcome,
+      metadata: {
+        sessionId,
+        sessionKey: event.sessionKey,
+        ...(flush
+          ? { flushId: flush.flushId, runId: flush.runId, compactionCount: flush.compactionCount }
+          : {}),
+        ...(event.action === "compacted"
+          ? {
+              metrics: {
+                messageCount: context.messageCount,
+                compactedCount: context.compactedCount,
+                tokensBefore: context.tokensBefore,
+                tokensAfter: context.tokensAfter,
+                firstKeptEntryId: context.firstKeptEntryId,
+              },
+            }
+          : {}),
+        ...(event.action === "closed" ? { sourceArchives: context.sourceArchives ?? [] } : {}),
+        captureStatus: transcript.status,
+      },
+      payloadTrust:
+        transcript.status === "available" && transcript.originClass === "agent"
+          ? "trusted"
+          : "untrusted",
+      body: entryParts.join("\n"),
+      provenanceObserver,
+      ...(cfg && sessionEntry
+        ? {
+            source: {
+              agentId,
+              sessionKey: event.sessionKey,
+              entry: sessionEntry,
+              endedSession:
+                event.type === "command" ||
+                event.action === "auto-reset" ||
+                event.action === "closed",
+            },
+          }
+        : {}),
+      assertCurrent: context.assertCurrent,
     });
+    context.onMemoryEventCreated?.(handle);
     log.debug("Memory file written successfully");
 
-    const relPath = shortenHomePath(memoryFilePath);
+    const relPath = shortenHomePath(path.join(workspaceDir, handle.relativePath));
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {
@@ -283,7 +310,12 @@ const saveSessionToMemory: HookHandler = (event) => {
     event.type === "session" &&
     event.action === "auto-reset" &&
     isSessionAutoResetReason(event.context.reason);
-  if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
+  const isLifecycle =
+    event.type === "session" &&
+    (event.action === "compacted" ||
+      event.action === "memory-flush" ||
+      (event.action === "closed" && event.context.reason === "thread-closed"));
+  if ((event.type !== "command" || !isResetCommand) && !isAutoReset && !isLifecycle) {
     return undefined;
   }
   const context = event.context;
@@ -316,19 +348,20 @@ const saveSessionToMemory: HookHandler = (event) => {
           cfg,
         )
       : ({ status: "available", content: null, originClass: "agent" } as const));
-  const writePromise = isAutoReset
-    ? saveSessionMemoryNow(event, agentId, transcript)
-    : runWithGatewayIndependentRootWorkContinuation(
-        () => saveSessionMemoryNow(event, agentId, transcript),
-        "hooks:session-memory",
-      );
+  const writePromise =
+    isAutoReset || isLifecycle
+      ? saveSessionMemoryNow(event, agentId, transcript)
+      : runWithGatewayIndependentRootWorkContinuation(
+          () => saveSessionMemoryNow(event, agentId, transcript),
+          "hooks:session-memory",
+        );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {
     pendingSessionMemoryWrites.delete(writePromise);
   });
   // Automatic rollover dispatch is already detached from the successor turn.
   // Keep its gateway admission alive until nested slug/model work finishes.
-  if (isAutoReset) {
+  if (isAutoReset || isLifecycle) {
     return writePromise;
   }
   return undefined;

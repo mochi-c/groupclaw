@@ -1,5 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
+import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
+import type { SessionOrigin } from "../../config/sessions/types.js";
 import type { AgentBinding } from "../../config/types.agents.js";
 import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -135,6 +137,20 @@ export type ChannelSecretsAdapter = {
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
+  /** Pure channel-owned audience facts; sender ACLs never establish group membership. */
+  resolveMemoryPolicy?: (params: { cfg: OpenClawConfig; origin: SessionOrigin }) =>
+    | {
+        channelMemory: "include" | "exclude";
+        group?: {
+          members: readonly { identity: SessionParticipantIdentity; label?: string }[];
+          /** Stable identity of a configured sharing group, scoped to the channel account. */
+          key: string;
+          /** Every configured conversation in this workspace has a compatible audience. */
+          workspaceShared: boolean;
+          consolidationAllowed: boolean;
+        };
+      }
+    | undefined;
 };
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;

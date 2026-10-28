@@ -47,6 +47,22 @@ function hasExternalOriginChange(
   );
 }
 
+function hasNativeConversationChange(
+  existing: SessionOrigin | undefined,
+  next: SessionOrigin | undefined,
+): boolean {
+  if (!existing || !next) {
+    return false;
+  }
+  const nextHasThread = next.threadId != null && next.threadId !== "";
+  return (
+    (next.nativeChannelId != null &&
+      (next.nativeChannelId !== existing.nativeChannelId ||
+        (!nextHasThread && existing.threadId != null))) ||
+    (nextHasThread && String(next.threadId) !== String(existing.threadId))
+  );
+}
+
 const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
@@ -61,9 +77,18 @@ const mergeSessionOrigin = (
   // status reads pointed at the previous channel.
   if (existing != null && hasExternalOriginChange(existing, next)) {
     delete merged.nativeChannelId;
+    delete merged.nativeParentChannelId;
+    delete merged.nativeThreadVisibility;
     delete merged.nativeDirectUserId;
     delete merged.avatar;
     delete merged.accountId;
+    delete merged.threadId;
+  }
+  // Explicit native routing facts retire the previous thread. Sparse metadata for the
+  // same conversation can retain an already admitted parent while channel lookup recovers.
+  if (hasNativeConversationChange(existing, next)) {
+    delete merged.nativeParentChannelId;
+    delete merged.nativeThreadVisibility;
     delete merged.threadId;
   }
   const mergeField = <K extends keyof SessionOrigin>(field: K, value: SessionOrigin[K]) => {
@@ -79,6 +104,8 @@ const mergeSessionOrigin = (
     "from",
     "to",
     "nativeChannelId",
+    "nativeParentChannelId",
+    "nativeThreadVisibility",
     "nativeDirectUserId",
     "avatar",
     "accountId",
@@ -111,6 +138,11 @@ export function deriveSessionOrigin(
     from: normalizeOptionalString(ctx.From),
     to: normalizeOptionalString(typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To),
     nativeChannelId: normalizeOptionalString(ctx.NativeChannelId),
+    nativeParentChannelId:
+      ctx.MessageThreadId != null && ctx.MessageThreadId !== ""
+        ? normalizeOptionalString(ctx.ThreadParentId)
+        : undefined,
+    nativeThreadVisibility: ctx.MessageThreadId ? ctx.NativeThreadVisibility : undefined,
     nativeDirectUserId: normalizeOptionalString(ctx.NativeDirectUserId),
     avatar: normalizeOptionalString(ctx.ConversationAvatar),
     accountId: normalizeOptionalString(ctx.AccountId),
@@ -267,7 +299,8 @@ export function deriveSessionMetaPatch(params: {
     const deliveryIdentityChanged =
       Boolean(nextProvider) &&
       !freshRouteOwnsNextProvider &&
-      hasExternalOriginChange(existingOrigin, origin);
+      (hasExternalOriginChange(existingOrigin, origin) ||
+        hasNativeConversationChange(existingOrigin, origin));
     patch.delivery = normalizeSessionDeliveryState({
       route: deliveryIdentityChanged ? undefined : sessionDeliveryRoute(params.existing),
       context: deliveryIdentityChanged
@@ -285,12 +318,20 @@ export function deriveSessionMetaPatch(params: {
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-function withoutThread<T extends { threadId?: string | number }>(identity?: T): T | undefined {
-  if (!identity || identity.threadId == null) {
+function withoutThread<
+  T extends {
+    threadId?: string | number;
+    nativeParentChannelId?: string;
+    nativeThreadVisibility?: "public" | "private";
+  },
+>(identity?: T): T | undefined {
+  if (!identity || (identity.threadId == null && identity.nativeParentChannelId == null)) {
     return identity;
   }
   const next: T = { ...identity };
   delete next.threadId;
+  delete next.nativeParentChannelId;
+  delete next.nativeThreadVisibility;
   return next;
 }
 

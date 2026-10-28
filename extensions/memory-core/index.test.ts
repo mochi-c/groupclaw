@@ -8,8 +8,10 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMemoryFlushPlan } from "./src/flush-plan.js";
-import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
+import {
+  buildMemoryPromptSection,
+  MEMORY_FRAGMENT_APPEND_TOOL_CONTRACT,
+} from "./src/memory-tool-contract.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
 const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -105,7 +107,7 @@ function captureMemoryModelContract(initialConfig: OpenClawConfig) {
   if (!search || !get || !promptBuilder) {
     throw new Error("expected memory model contract");
   }
-  return { search, get, promptBuilder };
+  return { search, get, promptBuilder, factories };
 }
 
 describe("buildPromptSection", () => {
@@ -163,6 +165,39 @@ describe("buildPromptSection", () => {
   });
 
   it.each([
+    { tools: ["memory_read"] },
+    { tools: ["memory_context_read", "memory_read"] },
+    { tools: ["memory_search", "memory_get", "memory_read"] },
+  ])("guides reference expansion with enabled tools: $tools", ({ tools }) => {
+    const { factories, promptBuilder } = captureMemoryModelContract({});
+    const read = factories.get("memory_read")?.({ config: {}, agentId: "main" }) as AnyAgentTool;
+    expect(Value.Check(read.parameters, { ref: "search-ref", lines: 2 })).toBe(true);
+    expect(Value.Check(read.parameters, { path: "MEMORY.md" })).toBe(false);
+    const prompt = promptBuilder({ availableTools: new Set(tools), agentId: "main" }).join("\n");
+    expect(prompt).toContain("memory_read");
+    expect(prompt).toContain("nextRef");
+    if (!tools.includes("memory_get")) {
+      expect(prompt).not.toContain("memory_get");
+    }
+  });
+
+  it("executes reference validation through the registered lazy read tool", async () => {
+    const { factories } = captureMemoryModelContract({});
+    const read = factories.get("memory_read")?.({ config: {}, agentId: "main" }) as AnyAgentTool;
+    await expect(read.execute("lazy-reference", { ref: "invalid" })).resolves.toMatchObject({
+      details: { status: "error", code: "MEMORY_REFERENCE_INVALID", text: "" },
+    });
+  });
+
+  it("describes current-context reading separately from broad search", () => {
+    const result = buildMemoryPromptSection({
+      availableTools: new Set(["memory_context_read", "memory_search", "memory_get"]),
+    });
+    expect(result[1]).toContain("memory_context_read for the current Workspace, Channel, Thread");
+    expect(result[1]).toContain("memory_search without corpus when broader discovery is needed");
+  });
+
+  it.each([
     [[], [], ["sessions_search", "sessions_history"]],
     [["sessions_search"], ["sessions_search"], ["sessions_history"]],
     [["sessions_history"], ["sessions_history"], ["sessions_search"]],
@@ -200,6 +235,35 @@ describe("buildPromptSection", () => {
     expect(result).toContain(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
     );
+  });
+
+  it("adds append guidance only when memory_fragment_append is available", () => {
+    const without = buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) });
+    expect(without.join("\n")).not.toContain("memory_fragment_append is the only way");
+
+    const withAppend = buildMemoryPromptSection({
+      availableTools: new Set(["memory_search", "memory_fragment_append"]),
+    });
+    expect(withAppend.join("\n")).toContain("memory_fragment_append is the only way");
+    expect(withAppend.join("\n")).toContain("one file per day");
+    for (const text of [withAppend.join("\n"), MEMORY_FRAGMENT_APPEND_TOOL_CONTRACT.describe()]) {
+      expect(text).toContain("never assume the latest sender is the subject");
+      expect(text).toContain("append it without asking for redundant confirmation");
+      expect(text).toContain("remaining uncertainty");
+      expect(text).toContain("Never persist confidential facts in shared memory");
+    }
+  });
+
+  it("emits append-only guidance when fragment append is the sole memory tool", () => {
+    const result = buildMemoryPromptSection({
+      availableTools: new Set(["memory_fragment_append"]),
+    });
+    expect(result[0]).toBe("## Memory Recall");
+    expect(result[1]).toContain("memory_fragment_append is the only way");
+    expect(result[1]).toContain("append it without asking for redundant confirmation");
+    expect(result[1]).toContain("never assume the latest sender is the subject");
+    expect(result.join("\n")).not.toContain("run memory_search");
+    expect(result.at(-1)).toBe("");
   });
 
   it.each([
@@ -261,6 +325,60 @@ describe("memory-core plugin runtime registration", () => {
     const prepared = search.prepareArguments?.(args) ?? args;
     expect(Value.Check(search.parameters, prepared)).toBe(true);
     expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
+  });
+
+  it.each(["memory_search", "memory_get", "memory_read"])(
+    "keeps %s unavailable when a conversation has no admitted audience",
+    (name) => {
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      const { factories } = captureMemoryModelContract(config);
+      const context = { config, agentId: "main", sessionKey: "agent:main:discord:family" };
+      expect(factories.get(name)?.(context)).toBeNull();
+      expect(factories.get(name)?.({ ...context, oneShotCliRun: true })).toBeTruthy();
+    },
+  );
+
+  it("executes registered context reading only with a host-resolved memory context", async () => {
+    let factory: ((ctx: unknown) => unknown) | undefined;
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntime,
+        registerTool(candidate, options) {
+          if (options?.names?.includes("memory_context_read") && typeof candidate === "function") {
+            factory = candidate as (ctx: unknown) => unknown;
+          }
+        },
+      }),
+    );
+    expect(factory?.({ agentId: "main", config: {} })).toBeNull();
+    const tool = factory?.({
+      agentId: "main",
+      config: {},
+      memoryAudience: {
+        kind: "conversation",
+        agentId: "main",
+        sessionKey: "agent:main:discord:family",
+        sessionId: "00000000-0000-4000-8000-000000000001",
+        context: {
+          participantCoverage: "complete",
+          artifacts: [
+            {
+              layer: "workspace",
+              scope: { kind: "workspace" },
+              relativePath: "memory/MEMORY.md",
+            },
+          ],
+        },
+      },
+      assertMemoryAudienceCurrent: () => {},
+    }) as AnyAgentTool | null;
+    if (!tool) {
+      throw new Error("expected context read tool");
+    }
+    expect(tool.name).toBe("memory_context_read");
+    await expect(tool.execute("context-read", { layers: [] })).resolves.toMatchObject({
+      details: { items: [], participantCoverage: "complete" },
+    });
   });
 
   it("does not resolve prompt config when no memory tools are exposed", () => {
@@ -500,7 +618,7 @@ describe("memory-core plugin runtime registration", () => {
   });
 });
 
-describe("buildMemoryFlushPlan", () => {
+describe("memory flush registration", () => {
   const cfg: OpenClawConfig = {
     agents: {
       defaults: {
@@ -509,102 +627,22 @@ describe("buildMemoryFlushPlan", () => {
     },
   };
 
-  it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
-    const plan = buildMemoryFlushPlan({
-      cfg,
-      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
-    });
-
-    expect(plan?.prompt).toContain("memory/2026-02-16.md");
-    expect(plan?.prompt).toContain(
-      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York)",
-    );
-    expect(plan?.prompt).toContain("Reference UTC: 2026-02-16 15:00 UTC");
-    expect(plan?.relativePath).toBe("memory/2026-02-16.md");
-    expect((plan?.prompt.match(/Current time:/g) ?? []).length).toBe(1);
-  });
-
-  it("defaults to safe prompts and gating values", () => {
-    const plan = buildMemoryFlushPlan();
-    expect(plan?.softThresholdTokens).toBe(4000);
-    expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
-    expect(plan?.prompt).toContain("memory/");
-    expect(plan?.prompt).toContain("MEMORY.md");
-    expect(plan?.systemPrompt).toContain("MEMORY.md");
-  });
-
-  it("respects disable flag", () => {
-    expect(
-      buildMemoryFlushPlan({
-        cfg: {
-          agents: {
-            defaults: { compaction: { memoryFlush: { enabled: false } } },
-          },
+  it("registers scoped Fragment persistence for detached flushes", () => {
+    let capability: Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0] | undefined;
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntime,
+        registerMemoryCapability(value) {
+          capability = value;
         },
       }),
-    ).toBeNull();
-  });
-
-  it("carries configured memory flush model override", () => {
-    const plan = buildMemoryFlushPlan({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              memoryFlush: {
-                model: "ollama/qwen3:8b",
-              },
-            },
-          },
-        },
-      },
+    );
+    const plan = capability?.providerFlushPlanResolver?.({ cfg });
+    expect(plan).toMatchObject({
+      persistenceToolNames: ["memory_fragment_append"],
+      lookupToolNames: ["memory_context_read"],
     });
-
-    expect(plan?.model).toBe("ollama/qwen3:8b");
-  });
-
-  it("falls back to defaults when numeric values are invalid", () => {
-    const plan = buildMemoryFlushPlan({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              memoryFlush: {
-                softThresholdTokens: -100,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(plan?.softThresholdTokens).toBe(4000);
-    expect(plan?.forceFlushTranscriptBytes).toBe(2 * 1024 * 1024);
-  });
-
-  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
-    const plan = buildMemoryFlushPlan({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: {
-              memoryFlush: {
-                forceFlushTranscriptBytes: "3mb",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
-  });
-
-  it("keeps overwrite guards in the default prompt", () => {
-    const prompt = buildMemoryFlushPlan()?.prompt;
-    expect(prompt).toMatch(/APPEND/i);
-    expect(prompt).toContain("do not overwrite");
-    expect(prompt).toContain("timestamped variant");
-    expect(prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+    expect(plan?.relativePath).toBeUndefined();
+    expect(capability?.flushPlanResolver).toBeUndefined();
   });
 });

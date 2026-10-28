@@ -72,7 +72,7 @@ describe("short-term promotion consolidation ownership", () => {
     expect(subagent.complete).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "researcher" }),
     );
-    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8");
     expect(memory).toContain("## Consolidated Memory");
     expect(memory).not.toContain("## Promoted From Short-Term Memory");
   });

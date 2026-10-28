@@ -43,7 +43,13 @@ export function scrubMemoryContent(params: {
     if (markerKey && params.entryKeys.has(markerKey)) {
       const start = index > 0 && LINEAGE_MARKER.test(lines[index - 1] ?? "") ? index - 1 : index;
       let end = index + 1;
-      if (end < lines.length && !PROMOTION_MARKER.test(lines[end] ?? "")) {
+      const blockEnd = lines.indexOf(`<!-- openclaw-memory-end:${markerKey} -->`, end);
+      const nextOpening = lines.findIndex(
+        (line, position) => position >= end && PROMOTION_MARKER.test(line),
+      );
+      if (blockEnd >= end && (nextOpening < 0 || blockEnd < nextOpening)) {
+        end = blockEnd + 1;
+      } else if (end < lines.length && !PROMOTION_MARKER.test(lines[end] ?? "")) {
         end += 1;
         while (end < lines.length && /^\s+\S/u.test(lines[end] ?? "")) {
           end += 1;

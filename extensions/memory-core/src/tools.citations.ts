@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { encodeMemoryArtifactReference } from "./memory-artifact-reference.js";
 
 export type MemorySearchToolResult = MemorySearchResult | MemoryCorpusSearchResult;
 
@@ -21,6 +22,7 @@ export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitations
 export function buildMemorySearchPresentation(
   results: MemorySearchResult[],
   include: boolean,
+  agentId: string,
 ): Map<MemorySearchToolResult, MemorySearchResult> {
   const presentation = new Map<MemorySearchToolResult, MemorySearchResult>();
   for (const entry of results) {
@@ -28,6 +30,16 @@ export function buildMemorySearchPresentation(
       ...entry,
       corpus: entry.source,
       snippet: stripMemoryAnnotationCarriers(entry.snippet),
+      ...(entry.source === "memory" && entry.path.endsWith(".md")
+        ? {
+            ref: encodeMemoryArtifactReference({
+              agentId,
+              relPath: entry.path,
+              from: entry.startLine,
+              lines: entry.endLine - entry.startLine + 1,
+            }),
+          }
+        : {}),
     };
     presented.citation = include ? formatCitation(presented) : undefined;
     if (include) {

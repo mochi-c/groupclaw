@@ -16,6 +16,7 @@ export async function writeWorkspaceFile(params: {
   content: string;
 }): Promise<string> {
   const filePath = path.join(params.dir, params.name);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, params.content, "utf-8");
   return filePath;
 }

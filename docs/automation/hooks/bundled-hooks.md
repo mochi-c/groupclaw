@@ -11,13 +11,13 @@ The hooks shipped with OpenClaw, and the behavior and options of each. Part of t
 
 ## Bundled hooks
 
-| Hook                    | Events                                               | Purpose                                                    |
-| ----------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
-| `boot-md`               | `gateway:startup`                                    | Run workspace `BOOT.md` instructions at startup.           |
-| `bootstrap-extra-files` | `agent:bootstrap`                                    | Add matching workspace bootstrap files to context.         |
-| `command-logger`        | `command`                                            | Append emitted command events to a JSONL log.              |
-| `compaction-notifier`   | `session:compact:before`, `session:compact:after`    | Add compaction status notices on supported delivery paths. |
-| `session-memory`        | `command:new`, `command:reset`, `session:auto-reset` | Save recent conversation excerpts to workspace memory.     |
+| Hook                    | Events                                                                                                              | Purpose                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `boot-md`               | `gateway:startup`                                                                                                   | Run workspace `BOOT.md` instructions at startup.           |
+| `bootstrap-extra-files` | `agent:bootstrap`                                                                                                   | Add matching workspace bootstrap files to context.         |
+| `command-logger`        | `command`                                                                                                           | Append emitted command events to a JSONL log.              |
+| `compaction-notifier`   | `session:compact:before`, `session:compact:after`                                                                   | Add compaction status notices on supported delivery paths. |
+| `session-memory`        | `command:new`, `command:reset`, `session:auto-reset`, `session:compacted`, `session:memory-flush`, `session:closed` | Save scoped lifecycle evidence and bounded excerpts.       |
 
 Enable one with `openclaw hooks enable <hook-name>` and verify its side effect.
 Startup-only hooks such as `boot-md` wait for the next Gateway start.
@@ -119,11 +119,38 @@ emits `session:auto-reset`, not a synthetic command event. Expiry is checked whe
 a subsequent turn is admitted; this is not a timer that writes memory at the
 daily boundary while the session is idle.
 
-The artifact is `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default, with a
-numeric suffix if that filename already exists. Dates use
+The artifact is a scoped `Event/YYYY-MM-DD_session-reset-<event-id>_timestamp.md`
+or `session-rollover` Event under the departing Channel/Thread directory. Local
+sessions without a delivery origin use `<workspace>/memory/Event/`. Dates use
 `agents.defaults.userTimezone`, then process `TZ` when no user timezone is set,
 and the host timezone as fallback. The file records session identity and the
-command source or automatic reset reason.
+command source or automatic reset reason. Framework metadata and embedded
+transcript trust are recorded separately; framework capture never upgrades
+untrusted conversation text. Unique Event identities and exclusive writes
+preserve concurrent captures. Events remain recall-only evidence, and Dream
+owns semantic Archive creation.
+
+Successful embedded compaction emits `session:compacted` and saves a
+`session.compacted` Event with available message/token metrics. Standalone
+compaction captures a bounded pre-compaction excerpt; automatic compaction
+captures the remaining conversation. Native harness compaction does not yet
+emit this memory Event.
+
+Tools-based memory flushes emit `session:memory-flush` before inference. The
+`memory.pre-compaction-flush` Event uses the source audience's Channel/Thread
+scope and records the original session, flush/retry identity, run ID, compaction
+count. It starts in `processing`; settlement updates the same artifact with its
+outcome without changing identity, creation time, scope, source, or payload.
+It carries no transcript excerpt; candidate notes remain in the provider's storage.
+An already revoked source or excluded launch Channel creates no flush Event.
+Later revocation prevents updates, and prior human edits are preserved.
+Capture or settlement failure is logged without changing the flush result.
+
+Discord Thread closure emits `session:closed` after guarded deletion commits.
+The `thread.closed` Event uses the actual deleted entry's Thread identity and
+records retained transcript archive generations. Its excerpt is explicitly
+unavailable; Dream can later expand the archive references. Rejected deletions
+and failed, skipped, or aborted compactions create no completion Events.
 
 | Entry option | Default       | Behavior                                                                                                        |
 | ------------ | ------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -146,7 +173,7 @@ fails, the artifact can record that content was unavailable. The workspace is
 resolved from event/agent config; you do not need to add a `workspace.dir` key.
 
 With `llmSlug: true`, conversation text is sent to the configured model to name
-the file. Failure falls back to a timestamp slug. Leave it off if you want no
+the file. Failure falls back to the host event type and identity. Leave it off if you want no
 extra model call for naming.
 
 <Note>

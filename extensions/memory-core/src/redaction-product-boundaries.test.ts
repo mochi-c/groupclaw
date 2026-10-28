@@ -217,7 +217,7 @@ describe("memory-core redaction product boundaries", () => {
     expect(applied.applied).toBe(1);
     expect(applied.appliedCandidates.map((candidate) => candidate.key)).toEqual([cleanKey]);
 
-    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memory).toContain(cleanText);
     expect(memory).toContain(`<!-- openclaw-memory-promotion:${cleanKey} -->`);
     expect(memory).not.toContain(`openclaw-memory-promotion:${contaminatedKey}`);

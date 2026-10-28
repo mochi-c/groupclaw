@@ -11,8 +11,6 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
 import {
@@ -20,6 +18,7 @@ import {
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
+import { seedTranscript } from "./dreaming-phases.test-support.js";
 import {
   memoryCoreWorkspaceStateKey,
   openMemoryCoreStateStore,
@@ -100,62 +99,6 @@ function candidateKey(candidates: Array<{ key: string; path: string }>, sourcePa
     candidates.find((entry) => entry.path === sourcePath),
     sourcePath,
   ).key;
-}
-
-async function seedTranscript(params: {
-  messages: Array<{
-    role: "assistant" | "user";
-    content: unknown;
-    owner?: boolean;
-    provenance?: { kind: "internal_system"; sourceTool: "heartbeat" };
-    timestamp: number | string;
-  }>;
-  sessionId: string;
-  sessionKey?: string;
-  hookExternalContentSource?: "gmail" | "webhook";
-}): Promise<void> {
-  const agentId = "main";
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const sessionKey = params.sessionKey ?? `agent:${agentId}:chat:${params.sessionId}`;
-  const timestamps = params.messages
-    .map((message) =>
-      typeof message.timestamp === "number" ? message.timestamp : Date.parse(message.timestamp),
-    )
-    .filter((timestamp) => Number.isFinite(timestamp));
-  // Accessor writes run normal maintenance; keep fixture entries fresh while
-  // retaining per-message timestamps as the dreaming corpus clock.
-  const updatedAt = Math.max(Date.now(), ...timestamps);
-  await fs.mkdir(sessionsDir, { recursive: true });
-  const registration = {
-    agentId,
-    sessionKey,
-    storePath,
-    entry: {
-      sessionId: params.sessionId,
-      updatedAt,
-      ...(params.hookExternalContentSource
-        ? { hookExternalContentSource: params.hookExternalContentSource }
-        : {}),
-    },
-  };
-  await upsertSessionEntry(registration);
-  for (const message of params.messages) {
-    await appendSessionTranscriptMessageByIdentity({
-      agentId,
-      sessionId: params.sessionId,
-      sessionKey,
-      storePath,
-      message: {
-        role: message.role,
-        content: message.content,
-        ...(message.owner ? { __openclaw: { senderIsOwner: true } } : {}),
-        ...(message.provenance ? { provenance: message.provenance } : {}),
-        timestamp: message.timestamp,
-      },
-    });
-  }
-  await upsertSessionEntry(registration);
 }
 
 function makeMessage(
@@ -793,6 +736,17 @@ describe("memory-core dreaming phases", () => {
         ]),
       ],
     });
+    for (const chatType of ["group", "channel"] as const) {
+      await seedTranscript({
+        sessionId: `scoped-${chatType}`,
+        chatType,
+        messages: [
+          makeMessage("user", "2026-04-05T18:04:00.000Z", [
+            { type: "text", text: `Scoped ${chatType} venue remains undecided.` },
+          ]),
+        ],
+      });
+    }
     const { sweep } = createDailyHarness(workspaceDir, {
       includeMainAgent: true,
       memorySearchEnabled: false,
@@ -821,6 +775,12 @@ describe("memory-core dreaming phases", () => {
     );
     expect(corpus).not.toContain("🎉");
     expect(corpus).not.toContain("🌍");
+    expect(corpus).not.toContain("venue remains undecided");
+    for (const chatType of ["group", "channel"] as const) {
+      expect(sessionIngestion.files[`main:sessions/main/scoped-${chatType}`]?.excludedReason).toBe(
+        "scoped-conversation",
+      );
+    }
 
     // Unmarked messages remain untrusted even though they enter the recall store.
     const store = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T19:00:00.000Z");
@@ -1419,7 +1379,7 @@ describe("memory-core dreaming phases", () => {
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(applied.applied).toBe(1);
-    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memory).toContain("Move router backups to S3 Glacier with encrypted retention policy.");
   });
 

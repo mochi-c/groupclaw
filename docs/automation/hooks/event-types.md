@@ -25,6 +25,7 @@ wildcard; subscribe to the two exact compaction keys.
 | `session:auto-reset`     | Existing session replaced due to daily/idle policy; dispatched independently of the successor turn.                       |
 | `session:compact:before` | Before compaction work; awaited.                                                                                          |
 | `session:compact:after`  | After successful compaction; awaited.                                                                                     |
+| `session:memory-flush`   | Before a tools-arm detached memory run starts; awaited best-effort capture while its source audience remains held.        |
 | `session:patch`          | An authorized Gateway patch is applied, or a supported model-selection path persists a change; asynchronous notification. |
 | `agent:bootstrap`        | Workspace bootstrap resolution before context injection; awaited.                                                         |
 | `gateway:startup`        | Scheduled after hook loading and sidecar/channel startup work; does not delay initial Gateway bind.                       |
@@ -82,6 +83,17 @@ path; do not assume it is JSONL on disk.
 `sessionEntry` identifying the ended `sessionId` and optional `sessionFile`,
 `reason` (`daily` or `idle`), and optional `transcriptArchived`, `nextSessionId`,
 and `nextSessionKey`.
+
+**`session:memory-flush`:** `cfg`, `agentId`, `workspaceDir`, source
+`sessionEntry`, host-granted `memoryEventScope`, and `memoryFlush` containing
+`flushId`, `runId`, and `compactionCount`. The source current-authority
+callback must be checked before effects. `previousSessionMemory` is an empty
+framework projection, so the bundled hook does not reread the source transcript.
+The bundled hook creates a `processing` Event and returns its host-owned handle
+through `onMemoryEventCreated`. Settlement updates that artifact with a
+`completed`, `failed`, `skipped`, or `exhausted` outcome. Pre-dispatch skips,
+excluded scopes, and already revoked sources do not create an artifact.
+Revocation after creation prevents settlement; the original artifact remains.
 
 **`agent:bootstrap`:** `workspaceDir`, mutable `bootstrapFiles`, and optional
 `cfg`, `sessionKey`, `sessionId`, `agentId`. Each bootstrap record has `name`,

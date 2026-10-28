@@ -1,7 +1,31 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
+import type { ChannelGroupAdapter } from "../channels/plugins/types.adapters.js";
+import { deriveSessionMetaPatch } from "../config/sessions/metadata.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveCanonicalMemoryChannelId,
+  resolveCanonicalMemoryThreadId,
+} from "../memory/scoped-memory.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { bindMemoryProvider } from "./memory-provider-adapter.js";
 import type { MemoryProviderHandle } from "./memory-provider-types.js";
+
+const channelPolicy = vi.hoisted(() => ({
+  resolve: undefined as ChannelGroupAdapter["resolveMemoryPolicy"],
+}));
+// mock-isolation: exercise the admitted audience without importing channel runtimes or starting transports.
+vi.mock("../channels/plugins/registry-loaded.js", () => ({
+  listLoadedChannelPlugins: () => [],
+  getLoadedChannelPluginById: () => ({
+    groups: {
+      resolveMemoryPolicy: (
+        params: Parameters<NonNullable<ChannelGroupAdapter["resolveMemoryPolicy"]>>[0],
+      ) => channelPolicy.resolve?.(params),
+    },
+  }),
+}));
 
 vi.mock("../config/sessions/session-delivery-generation.js", async () => {
   const { fakeSessionGenerationModule } = await import("./memory-audience.test-support.js");
@@ -17,6 +41,7 @@ import {
   assertMemoryAudienceSession,
   delegateMemoryAudience,
   isHostMemoryAudience,
+  readMemoryAudienceExecutionSignal,
   resolveMemoryAudienceFromEntry,
 } from "./memory-audience.js";
 import { fakeSessionOwner, type FakeSessionRow } from "./memory-audience.test-support.js";
@@ -82,9 +107,178 @@ function provider(): MemoryProviderHandle & { health: ReturnType<typeof vi.fn> }
 
 beforeEach(() => {
   fakeSessionOwner.reset();
+  channelPolicy.resolve = undefined;
 });
 
 describe("memory audience resolution", () => {
+  it("shares declared participant identities across channels and revokes changed links", async () => {
+    const human = (pluginId: string, id: string) => ({
+      type: "observation" as const,
+      pluginId,
+      accountId: "default",
+      senderKind: "human" as const,
+      id,
+    });
+    const discordAlice = { identity: human("discord", "123"), label: "Alice" };
+    const slackAlice = { identity: human("slack", "U123"), label: "Alice on Slack" };
+    const visitor = { identity: human("discord", "456"), label: "Alice" };
+    let cfg: OpenClawConfig = {
+      session: { identityLinks: { alice: ["discord:123", "slack:U123"] } },
+    };
+    channelPolicy.resolve = () => ({
+      channelMemory: "include",
+      group: {
+        key: "family",
+        members: [discordAlice, slackAlice, visitor],
+        workspaceShared: true,
+        consolidationAllowed: true,
+      },
+    });
+    const entry = {
+      ...rootEntry("channel"),
+      participants: [discordAlice],
+      delivery: {
+        kind: "external" as const,
+        route: { channel: "discord", target: { to: "channel:100" } },
+        context: { channel: "discord", to: "channel:100" },
+        origin: { provider: "discord", nativeChannelId: "100" },
+      },
+    };
+    fakeSessionOwner.rows.set(ROOT_KEY, entry);
+    const result = await resolveMemoryAudienceFromEntry(
+      {
+        agentId: AGENT_ID,
+        sessionKey: ROOT_KEY,
+        sessionId: entry.sessionId,
+        storePath: STORE_PATH,
+        senderIsOwner: false,
+        getConfig: () => cfg,
+      },
+      entry,
+    );
+    if (result.status !== "granted") {
+      throw new Error(result.reason);
+    }
+    try {
+      const users = result.audience.context?.artifacts.filter((item) => item.layer === "users");
+      expect(users).toHaveLength(2);
+      expect(new Set(users?.map((item) => item.relativePath)).size).toBe(2);
+      expect(users?.map((item) => item.userName)).toEqual(["Alice", "Alice"]);
+      assertMemoryAudienceCurrent(result.audience);
+      cfg = { session: { identityLinks: { alice: ["slack:U123"] } } };
+      expect(() => assertMemoryAudienceCurrent(result.audience)).toThrow(
+        "membership or publication authority changed",
+      );
+    } finally {
+      result.release();
+    }
+    expect(fakeSessionOwner.activeLeases).toBe(0);
+  });
+
+  it.each([false, true])(
+    "includes silent configured members and scopes extra speakers to Threads (%s)",
+    async (thread) => {
+      const identity = (id: string) => ({ type: "profile" as const, id });
+      channelPolicy.resolve = () => ({
+        channelMemory: "exclude",
+        group: {
+          members: [
+            { identity: identity("alice"), label: "Configured Alice" },
+            { identity: identity("bob"), label: "Bob" },
+          ],
+          key: "family",
+          workspaceShared: true,
+          consolidationAllowed: true,
+        },
+      });
+      const ctx = buildChannelInboundEventContext({
+        channel: "discord",
+        from: "discord:alice",
+        sender: { id: "alice", name: "Alice" },
+        conversation: {
+          kind: "channel",
+          id: thread ? "101" : "100",
+          nativeChannelId: thread ? "101" : "100",
+          ...(thread ? { parentId: "100", threadId: "101" } : {}),
+        },
+        route: { agentId: AGENT_ID, routeSessionKey: ROOT_KEY },
+        reply: { to: `channel:${thread ? "101" : "100"}` },
+        message: { rawBody: "remember our plans" },
+      });
+      const root = rootEntry("channel");
+      const entry = {
+        ...root,
+        ...deriveSessionMetaPatch({ ctx, sessionKey: ROOT_KEY, existing: root }),
+        participants: [
+          { identity: identity("alice"), label: "Alice" },
+          { identity: identity("visitor"), label: "Visitor" },
+        ],
+      };
+      const { audience, release } = await grantAt(ROOT_KEY, entry);
+      try {
+        expect(
+          audience.context?.artifacts
+            .filter((item) => item.layer === "users")
+            .map((item) => item.userName),
+        ).toEqual(thread ? ["Alice", "Bob", "Visitor"] : ["Alice", "Bob"]);
+        expect(audience.context?.participantCoverage).toBe(thread ? "partial" : "complete");
+        expect(audience.context?.artifacts.some((item) => item.layer === "channel")).toBe(false);
+        expect(audience.context?.fragment?.scope.kind).toBe(thread ? "thread" : undefined);
+      } finally {
+        release();
+      }
+    },
+  );
+
+  it("rejects background authority when configured membership changes after admission", async () => {
+    let groupKey = "initial";
+    channelPolicy.resolve = () => ({
+      channelMemory: "include",
+      group: { key: groupKey, members: [], workspaceShared: true, consolidationAllowed: true },
+    });
+    const entry = {
+      ...rootEntry("channel"),
+      delivery: {
+        kind: "external" as const,
+        route: { channel: "discord", target: { to: "channel:100" } },
+        context: { channel: "discord", to: "channel:100" },
+        origin: { provider: "discord", nativeChannelId: "100" },
+      },
+    };
+    fakeSessionOwner.rows.set(ROOT_KEY, entry);
+    const result = await resolveMemoryAudienceFromEntry(
+      {
+        agentId: AGENT_ID,
+        sessionKey: ROOT_KEY,
+        sessionId: entry.sessionId,
+        senderIsOwner: false,
+        storePath: STORE_PATH,
+        getConfig: () => ({}),
+      },
+      entry,
+    );
+    if (result.status !== "granted") {
+      throw new Error(result.reason);
+    }
+    try {
+      const executionSignal = readMemoryAudienceExecutionSignal(result.audience);
+      assertMemoryAudienceCurrent(result.audience);
+      groupKey = "changed";
+      sessionChanges.emit({ all: true, scope: "config" });
+      expect(executionSignal.aborted).toBe(true);
+      expect(() => assertMemoryAudienceCurrent(result.audience)).toThrow(
+        "membership or publication authority changed",
+      );
+      groupKey = "initial";
+      sessionChanges.emit({ all: true, scope: "config" });
+      expect(() => assertMemoryAudienceCurrent(result.audience)).toThrow(
+        "membership or publication authority changed",
+      );
+    } finally {
+      result.release();
+    }
+  });
+
   it.each([
     ["owner direct", "direct", true, "owner-private"],
     ["non-owner direct", "direct", false, "conversation"],
@@ -93,7 +287,7 @@ describe("memory audience resolution", () => {
   ] as const)("maps a %s root", async (_name, chatType, owner, expectedKind) => {
     const root = rootEntry(chatType);
     const { audience } = await grantAt(ROOT_KEY, root, owner);
-    expect(audience).toEqual(
+    expect(audience).toMatchObject(
       expectedKind === "owner-private"
         ? { kind: "owner-private", agentId: AGENT_ID }
         : {
@@ -108,20 +302,178 @@ describe("memory audience resolution", () => {
   });
 
   it("uses durable chat type for threaded sessions", async () => {
-    const root = rootEntry("group");
+    const root = {
+      ...rootEntry("group"),
+      delivery: {
+        kind: "external" as const,
+        route: {
+          channel: "discord",
+          accountId: "family-bot",
+          target: { to: "room-1", chatType: "group" as const },
+          thread: { id: "thread-1" },
+        },
+        context: {
+          channel: "discord",
+          accountId: "family-bot",
+          to: "room-1",
+          threadId: "thread-1",
+        },
+        origin: {
+          provider: "discord",
+          accountId: "family-bot",
+          nativeChannelId: "room-1",
+          threadId: "thread-1",
+        },
+      },
+      participants: [
+        { identity: { type: "profile" as const, id: "alice" }, label: "Alice" },
+        { identity: { type: "agent" as const, id: "main" }, label: "OpenClaw" },
+        {
+          identity: {
+            type: "observation" as const,
+            pluginId: "discord",
+            accountId: "family-bot",
+            senderKind: "human" as const,
+            id: "bob",
+          },
+          label: "Bob",
+        },
+      ],
+      participantCount: 4,
+    };
     const threadKey = "agent:main:discord:group:room:thread:reply";
     const { audience } = await grantAt(threadKey, root, true);
-    expect(audience).toEqual({
+    expect(audience).toMatchObject({
       kind: "conversation",
       agentId: AGENT_ID,
       sessionKey: threadKey,
       sessionId: root.sessionId,
+      context: {
+        participantCoverage: "partial",
+        artifacts: [
+          { layer: "workspace", scope: { kind: "workspace" } },
+          { layer: "channel", scope: { kind: "channel" } },
+          {
+            layer: "thread",
+            scope: { kind: "thread", threadId: expect.stringMatching(/^thread-v1-/u) },
+          },
+          { layer: "users", scope: { kind: "user" }, userName: "Alice" },
+          { layer: "users", scope: { kind: "user" }, userName: "Bob" },
+        ],
+      },
     });
   });
 
   it("reuses an admitted root entry without a session read", async () => {
     await grantAt(ROOT_KEY, rootEntry(), true);
     expect(fakeSessionOwner.workerReads).toEqual([]);
+  });
+
+  it.each([
+    { name: "channel", nativeId: "room-1", kind: "channel" as const },
+    { name: "native thread", nativeId: "thread-1", parentId: "room-1", threadId: "thread-1" },
+    { name: "auto thread", nativeId: "room-1", parentId: "room-1", threadId: "thread-1" },
+    { name: "forum post", nativeId: "post-1", parentId: "room-1", threadId: "post-1" },
+    { name: "direct message", nativeId: "dm-1", kind: "direct" as const },
+    { name: "group DM", nativeId: "group-dm-1", kind: "group" as const },
+  ])("resolves Discord $name memory from persisted inbound facts", async (input) => {
+    const ctx = buildChannelInboundEventContext({
+      channel: "discord",
+      accountId: "family-bot",
+      from: "discord:user-1",
+      sender: { id: "user-1", name: "Alice" },
+      conversation: {
+        kind: input.kind ?? "channel",
+        id: input.nativeId,
+        nativeChannelId: input.nativeId,
+        parentId: input.parentId,
+        threadId: input.threadId,
+      },
+      route: { agentId: AGENT_ID, routeSessionKey: ROOT_KEY },
+      reply: { to: `channel:${input.threadId ?? input.nativeId}` },
+      message: { rawBody: "remember our plans" },
+    });
+    const root = rootEntry(input.kind ?? "channel");
+    const entry = {
+      ...root,
+      ...deriveSessionMetaPatch({ ctx, sessionKey: ROOT_KEY, existing: root }),
+    };
+    const { audience, release } = await grantAt(ROOT_KEY, entry, true);
+    try {
+      const channelId = resolveCanonicalMemoryChannelId({
+        provider: "discord",
+        accountId: "family-bot",
+        channelId: input.parentId ?? input.nativeId,
+      });
+      expect(audience.context?.artifacts.find((item) => item.layer === "channel")?.scope).toEqual({
+        kind: "channel",
+        channelId,
+      });
+      const thread = audience.context?.artifacts.find((item) => item.layer === "thread");
+      expect(thread?.scope).toEqual(
+        input.threadId
+          ? { kind: "thread", channelId, threadId: resolveCanonicalMemoryThreadId(input.threadId) }
+          : undefined,
+      );
+      expect(fakeSessionOwner.workerReads).toEqual([]);
+    } finally {
+      release();
+    }
+  });
+
+  it("denies a native thread whose durable parent is unavailable", async () => {
+    const root = {
+      ...rootEntry("channel"),
+      delivery: {
+        kind: "external" as const,
+        route: { channel: "discord", target: { to: "channel:thread-1" } },
+        context: { channel: "discord", to: "channel:thread-1", threadId: "thread-1" },
+        origin: { provider: "discord", nativeChannelId: "thread-1", threadId: "thread-1" },
+      },
+    };
+    await expect(resolveAt(ROOT_KEY, root, true)).resolves.toMatchObject({
+      status: "denied",
+      reason: expect.stringContaining("parent channel"),
+    });
+    expect(fakeSessionOwner.activeLeases).toBe(0);
+  });
+
+  it("keeps participant memory IDs stable across property order and reports roster coverage honestly", async () => {
+    const identity = {
+      type: "observation" as const,
+      pluginId: "discord",
+      accountId: "family-bot",
+      senderKind: "human" as const,
+      id: "alice",
+    };
+    const first = await grantAt(ROOT_KEY, {
+      ...rootEntry("channel"),
+      participants: [{ identity, label: "Alice" }],
+      participantCount: 1,
+    });
+    const reordered = {
+      id: identity.id,
+      senderKind: identity.senderKind,
+      accountId: identity.accountId,
+      pluginId: identity.pluginId,
+      type: identity.type,
+    };
+    const second = await grantAt(ROOT_KEY, {
+      ...rootEntry("channel"),
+      participants: [{ identity: reordered, label: "Renamed Alice" }],
+      participantCount: 1,
+    });
+    try {
+      const userScope = (audience: typeof first.audience) =>
+        audience.context?.artifacts.find((item) => item.layer === "users")?.scope;
+      expect(userScope(first.audience)).toEqual(userScope(second.audience));
+      // Session participants are observed contributors, not a complete platform membership list.
+      expect(first.audience.context?.participantCoverage).toBe("partial");
+      expect(second.audience.context?.participantCoverage).toBe("partial");
+    } finally {
+      first.release();
+      second.release();
+    }
   });
 
   it("reads a child's durable parent on the session read worker", async () => {
@@ -278,7 +630,7 @@ describe("memory audience resolution", () => {
     if (resolution.status !== "granted") {
       throw new Error(resolution.reason);
     }
-    expect(resolution.audience).toEqual({
+    expect(resolution.audience).toMatchObject({
       kind: "conversation",
       agentId: AGENT_ID,
       sessionKey: ROOT_KEY,

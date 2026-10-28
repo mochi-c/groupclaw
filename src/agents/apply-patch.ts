@@ -20,6 +20,7 @@ import {
 } from "./apply-patch-file-ops.js";
 import { resolveApplyPatchInputPath, toDisplayPath } from "./apply-patch-paths.js";
 import { applyUpdateHunk, type UpdateFileChunk } from "./apply-patch-update.js";
+import type { MemoryFileAccess } from "./memory-file-access.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
   preserveAtPrefixedRelativePath,
@@ -123,6 +124,7 @@ export function createApplyPatchTool(
     containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    memoryFileAccess?: MemoryFileAccess;
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
@@ -157,6 +159,7 @@ export function createApplyPatchTool(
           sandbox,
           workspaceOnly,
           memoryWriteProvenance: options.memoryWriteProvenance,
+          memoryFileAccess: options.memoryFileAccess,
           signal: executionSignal,
         });
       } catch (error) {

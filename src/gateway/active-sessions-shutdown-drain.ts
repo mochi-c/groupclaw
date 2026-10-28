@@ -1,4 +1,5 @@
 import { buildSessionEndHookPayload } from "../auto-reply/reply/session-hooks.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../globals.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createSessionEndTranscriptSourceLease } from "../plugins/session-end-transcript.js";
@@ -22,6 +23,7 @@ export async function drainActiveSessionsForShutdown(params: {
   const emittedSessionIds: string[] = [];
   const transcriptLeases: Array<{ revoke(): void }> = [];
   const hookRunner = getGlobalHookRunner();
+  const drainScope = new AbortController();
   let settledEmissions = 0;
   // Start all emissions before the bounded aggregate so one slow plugin cannot
   // prevent later tracked sessions from receiving session_end.
@@ -32,6 +34,15 @@ export async function drainActiveSessionsForShutdown(params: {
         emittedSessionIds.push(entry.sessionId);
         if (!hookRunner?.hasHooks("session_end")) {
           return;
+        }
+        const read = await withSessionEntryReadOnlyInWorker(
+          { agentId: entry.agentId, sessionKey: entry.sessionKey, storePath: entry.storePath },
+          () => drainScope.signal.throwIfAborted(),
+          async (result) => result,
+        );
+        drainScope.signal.throwIfAborted();
+        if (!read.ok) {
+          throw read.error;
         }
         const transcript = resolveStableSessionEndTranscript({
           sessionId: entry.sessionId,
@@ -55,6 +66,7 @@ export async function drainActiveSessionsForShutdown(params: {
           reason: params.reason,
           sessionFile: transcript.sessionFile,
           transcriptArchived: transcript.transcriptArchived,
+          sessionEntry: read.value?.sessionId === entry.sessionId ? read.value : undefined,
           endedTranscript: transcriptLease.source,
         });
         await hookRunner.runSessionEnd(payload.event, payload.context);
@@ -66,6 +78,7 @@ export async function drainActiveSessionsForShutdown(params: {
     }),
   );
   const timedOut = !(await settlesWithin(drain, totalTimeoutMs));
+  drainScope.abort();
   for (const lease of transcriptLeases) {
     lease.revoke();
   }

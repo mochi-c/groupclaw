@@ -96,7 +96,7 @@ it("filters irrelevant removals but preserves indexable files and possible direc
   for (const file of [
     "extra/notes/keep.md",
     "extra/media/PHOTO.PNG",
-    "MEMORY.md",
+    "memory/MEMORY.md",
     "USER.md",
     "memory/keep.md",
   ]) {

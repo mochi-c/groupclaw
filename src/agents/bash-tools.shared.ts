@@ -18,6 +18,8 @@ type BashSandboxWorkdirMount = {
 };
 
 export type BashSandboxConfig = {
+  isolatedWorkspace?: true;
+  executionSignal?: AbortSignal;
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;

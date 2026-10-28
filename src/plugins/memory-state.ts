@@ -416,15 +416,15 @@ export function resolveMemoryFlushPlan(params: {
 }
 
 /**
- * Whether the flush plan resolver belongs to a selected slot owner that registers the
- * provider-neutral runtime. Such a provider may persist through its own tools, so its
- * flush does not depend on a writable workspace; it is answered without calling the resolver.
+ * Whether the selected resolver's owner consumes audiences and may persist through
+ * its own tools. The resolved plan still decides whether workspace writes are required.
  */
-export function isMemoryFlushPlanNativeProviderOwned(): boolean {
+export function isMemoryFlushPlanAudienceOwned(): boolean {
   const registration = getMemoryCapability();
   return Boolean(
     registration?.flushPlanSource &&
-    registration.capability.providerRuntime &&
+    (registration.capability.providerRuntime ||
+      registration.capability.runtime?.supportsMemoryAudience) &&
     registration.memorySlotSelected === true &&
     registration.flushPlanSource.pluginId === registration.pluginId,
   );
@@ -445,12 +445,11 @@ export function getMemoryProviderRuntime() {
 
 let standaloneMemoryManagerActive = false;
 // Identity of the slot owner a standalone lookup loaded outside any registry.
-let standaloneMemoryOwner: { pluginId: string; native: boolean } | undefined;
+type LoadedMemoryOwner = { pluginId: string; native: boolean; supportsMemoryAudience?: true };
+let standaloneMemoryOwner: LoadedMemoryOwner | undefined;
 
 /** Records, or clears, the slot owner a standalone memory lookup loaded. */
-export function setStandaloneMemoryOwner(
-  owner: { pluginId: string; native: boolean } | undefined,
-): void {
+export function setStandaloneMemoryOwner(owner: LoadedMemoryOwner | undefined): void {
   standaloneMemoryOwner = owner;
 }
 
@@ -461,31 +460,48 @@ export function setStandaloneMemoryOwner(
  * Undefined means no loaded owner answers; callers then keep their legacy path
  * and its own loading behavior.
  */
-export function resolveLoadedMemoryProviderKind(
-  cfg: OpenClawConfig,
-): "native" | "legacy" | undefined {
-  const current = getMemoryCapability()?.capability;
-  if (current?.providerRuntime || current?.runtime) {
-    return current.providerRuntime ? "native" : "legacy";
+function resolveLoadedMemoryOwner(cfg: OpenClawConfig): LoadedMemoryOwner | undefined {
+  const ownerFacts = (registration: MemoryPluginCapabilityRegistration | undefined) => {
+    const capability = registration?.capability;
+    return registration && (capability?.providerRuntime || capability?.runtime)
+      ? {
+          pluginId: registration.pluginId,
+          native: capability.providerRuntime !== undefined,
+          supportsMemoryAudience: capability.runtime?.supportsMemoryAudience,
+        }
+      : undefined;
+  };
+  const current = ownerFacts(getMemoryCapability());
+  if (current) {
+    return current;
   }
   const plugins = normalizePluginsConfig(cfg.plugins);
   const slotPluginId = plugins.enabled ? plugins.slots.memory : undefined;
   if (!slotPluginId) {
     return undefined;
   }
-  const processOwner = resolveMemoryCapabilityRegistration(
-    getActivePluginRegistry()?.memoryCapabilities ?? [],
+  const processOwner = ownerFacts(
+    resolveMemoryCapabilityRegistration(getActivePluginRegistry()?.memoryCapabilities ?? []),
   );
-  if (
-    processOwner?.pluginId === slotPluginId &&
-    (processOwner.capability.providerRuntime || processOwner.capability.runtime)
-  ) {
-    return processOwner.capability.providerRuntime ? "native" : "legacy";
+  if (processOwner?.pluginId === slotPluginId) {
+    return processOwner;
   }
   if (standaloneMemoryOwner?.pluginId === slotPluginId) {
-    return standaloneMemoryOwner.native ? "native" : "legacy";
+    return standaloneMemoryOwner;
   }
   return undefined;
+}
+
+export function resolveLoadedMemoryProviderKind(
+  cfg: OpenClawConfig,
+): "native" | "legacy" | undefined {
+  const owner = resolveLoadedMemoryOwner(cfg);
+  return owner ? (owner.native ? "native" : "legacy") : undefined;
+}
+
+export function usesLoadedMemoryAudience(cfg: OpenClawConfig): boolean {
+  const owner = resolveLoadedMemoryOwner(cfg);
+  return owner?.native === true || owner?.supportsMemoryAudience === true;
 }
 
 // Standalone managers are intentionally absent from the active plugin registry.

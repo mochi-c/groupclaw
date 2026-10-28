@@ -4,12 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { runCompactionHooks } from "../../../agents/embedded-agent-runner/compaction-hooks.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   loadTranscriptEventsSync,
   readSessionTranscriptBoundedMessageTailPage,
   replaceTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import { isMissingPathError } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -94,7 +97,7 @@ function sessionMemoryRecord(role: "user" | "assistant", text: string): string {
 
 async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
-  previousSessionEntry: { sessionId: string };
+  previousSessionEntry: Pick<SessionEntry, "sessionId"> & Partial<SessionEntry>;
   events?: Array<Record<string, unknown>>;
   cfg?: OpenClawConfig;
   action?: "new" | "reset";
@@ -142,7 +145,7 @@ async function runNewWithPreviousSessionEntry(params: {
   const event = createHookEvent("command", params.action ?? "new", sessionKey, {
     agentId,
     cfg,
-    previousSessionEntry: { sessionId: params.previousSessionEntry.sessionId },
+    previousSessionEntry: params.previousSessionEntry,
     ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
   });
   if (params.timestamp) {
@@ -153,7 +156,16 @@ async function runNewWithPreviousSessionEntry(params: {
   await flushSessionMemoryWritesForTest();
 
   const memoryDir = path.join(params.tempDir, "memory");
-  const files = await fs.readdir(memoryDir);
+  const files = (
+    await fs.readdir(memoryDir, { recursive: true }).catch((error: unknown) => {
+      if (isMissingPathError(error)) {
+        return [];
+      }
+      throw error;
+    })
+  )
+    .filter((file) => file.endsWith(".md"))
+    .map((file) => file.replaceAll(path.sep, "/"));
   const memoryContent =
     files.length > 0
       ? await fs.readFile(
@@ -192,22 +204,187 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 describe("session-memory hook", () => {
   it.each([
+    { action: "compacted", eventType: "session.compacted", reason: undefined },
+    { action: "closed", eventType: "thread.closed", reason: "thread-closed" },
+  ] as const)("records scoped $eventType evidence", async ({ action, eventType, reason }) => {
+    const workspaceDir = await createCaseWorkspace("lifecycle");
+    const sessionEntry: SessionEntry = {
+      sessionId: "lifecycle-thread",
+      updatedAt: 1,
+      chatType: "channel",
+      delivery: {
+        kind: "external",
+        route: { channel: "discord", target: { to: "channel:101" } },
+        context: { channel: "discord", to: "channel:101" },
+        origin: {
+          provider: "discord",
+          nativeChannelId: "101",
+          nativeParentChannelId: "100",
+          threadId: "101",
+        },
+      },
+    };
+    const event = createHookEvent("session", action, "agent:main:discord:channel:101", {
+      agentId: "main",
+      workspaceDir,
+      cfg: {},
+      reason,
+      sessionEntry,
+      previousSessionMemory: {
+        status: "available",
+        content: 'user: "Lifecycle evidence"',
+        originClass: "untrusted",
+      },
+      tokensBefore: 1000,
+      tokensAfter: 300,
+      sourceArchives: [{ sessionId: "lifecycle-thread", generation: "closed-generation" }],
+    });
+    if (action === "compacted") {
+      registerInternalHook("session:compacted", handler);
+      try {
+        await runCompactionHooks({
+          phase: "after",
+          config: {},
+          sessionId: sessionEntry.sessionId,
+          sessionEntry,
+          sessionKey: event.sessionKey,
+          sessionAgentId: "main",
+          workspaceDir,
+          memoryWorkspaceDir: workspaceDir,
+          sessionFile: event.sessionKey,
+          originalMessages: [{ role: "user", content: "Lifecycle evidence", timestamp: 0 }],
+          messageCountAfter: 1,
+          compactedCount: 2,
+          tokensBefore: 1000,
+          tokensAfter: 300,
+        });
+      } finally {
+        unregisterInternalHook("session:compacted", handler);
+      }
+    } else {
+      await handler(event);
+    }
+    await flushSessionMemoryWritesForTest();
+    const files = (await fs.readdir(path.join(workspaceDir, "memory"), { recursive: true }))
+      .filter((file) => file.endsWith(".md"))
+      .map((file) => file.replaceAll(path.sep, "/"));
+    expect(files).toHaveLength(1);
+    const file = expectDefined(files[0], "lifecycle Event");
+    expect(file).toMatch(/^Channel\/[^/]+\/Thread\/[^/]+\/Event\//);
+    const content = await fs.readFile(path.join(workspaceDir, "memory", file), "utf8");
+    expect(content).toContain(`eventType: ${eventType}`);
+    expect(content).toContain('sessionId: "lifecycle-thread"');
+    expect(content).toContain('user: "Lifecycle evidence"');
+    expect(content).toContain("payloadTrust: untrusted");
+    if (action === "compacted") {
+      expect(content).toContain('"tokensBefore":1000');
+      expect(content).toContain('"tokensAfter":300');
+    } else {
+      expect(content).toContain('"generation":"closed-generation"');
+    }
+  });
+
+  it("records reset evidence in the departing Thread instead of the successor Channel", async () => {
+    const workspaceDir = await createCaseWorkspace("thread-reset");
+    const event = createHookEvent("command", "reset", "agent:main:discord:channel:101", {
+      agentId: "main",
+      workspaceDir,
+      cfg: { agents: { defaults: { workspace: workspaceDir } } },
+      previousSessionEntry: {
+        sessionId: "departing-thread",
+        updatedAt: 1,
+        chatType: "channel",
+        delivery: {
+          kind: "external",
+          route: { channel: "discord", target: { to: "channel:101" } },
+          context: { channel: "discord", to: "channel:101" },
+          origin: {
+            provider: "discord",
+            nativeChannelId: "101",
+            nativeParentChannelId: "100",
+            threadId: "101",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "successor-channel",
+        updatedAt: 2,
+        chatType: "channel",
+        delivery: {
+          kind: "external",
+          route: { channel: "discord", target: { to: "channel:200" } },
+          context: { channel: "discord", to: "channel:200" },
+          origin: { provider: "discord", nativeChannelId: "200" },
+        },
+      },
+      previousSessionMemory: {
+        status: "available",
+        content: 'user: "Synthetic departing Thread evidence"',
+        originClass: "untrusted",
+      },
+    });
+    await handler(event);
+    await flushSessionMemoryWritesForTest();
+    const files = (await fs.readdir(path.join(workspaceDir, "memory"), { recursive: true }))
+      .filter((file) => file.endsWith(".md"))
+      .map((file) => file.replaceAll(path.sep, "/"));
+    expect(files).toHaveLength(1);
+    const file = expectDefined(files[0], "Thread Event file");
+    expect(file).toMatch(
+      /^Channel\/id-[a-f0-9]{64}\/Thread\/id-[a-f0-9]{64}\/Event\/\d{4}-\d{2}-\d{2}_session-reset-[a-f0-9-]{36}_[0-9]+\.md$/,
+    );
+    const content = await fs.readFile(path.join(workspaceDir, "memory", file), "utf8");
+    expect(content).toContain("eventType: session.reset");
+    expect(content).toContain('sessionId: "departing-thread"');
+    expect(content).toContain("payloadTrust: untrusted");
+    expect(content).toContain('user: "Synthetic departing Thread evidence"');
+    expect(content).not.toContain("successor-channel");
+  });
+
+  it.each([
     { type: "command", action: "new", sessionKey: "agent:main:dashboard:incognito-new" },
     { type: "command", action: "reset", sessionKey: "agent:main:dashboard:incognito-reset" },
     { type: "session", action: "auto-reset", sessionKey: "agent:main:dashboard:incognito-idle" },
+    { type: "session", action: "compacted", sessionKey: "agent:main:dashboard:incognito-compact" },
+    { type: "session", action: "closed", sessionKey: "agent:main:dashboard:incognito-closed" },
+    {
+      type: "session",
+      action: "closed",
+      sessionKey: "agent:main:discord:channel:101",
+      incognito: true,
+    },
     { type: "command", action: "reset", sessionKey: "agent:main:private", incognito: true },
   ] as const)("does not capture Incognito $type:$action memory ($sessionKey)", async (testCase) => {
     const workspaceDir = await createCaseWorkspace("incognito");
     const event = createHookEvent(testCase.type, testCase.action, testCase.sessionKey, {
       agentId: "main",
       workspaceDir,
-      sessionEntry: { sessionId: "private-session", incognito: "incognito" in testCase },
+      sessionEntry: {
+        sessionId: "private-session",
+        incognito: "incognito" in testCase,
+        ...(testCase.action === "closed"
+          ? {
+              chatType: "channel",
+              delivery: {
+                kind: "external",
+                route: { channel: "discord", target: { to: "channel:101" } },
+                context: { channel: "discord", to: "channel:101" },
+                origin: {
+                  provider: "discord",
+                  nativeChannelId: "101",
+                  nativeParentChannelId: "100",
+                  threadId: "101",
+                },
+              },
+            }
+          : {}),
+      },
       previousSessionMemory: {
         status: "available",
         content: "SYNTHETIC_INCOGNITO_MEMORY_SENTINEL",
         originClass: "agent",
       },
-      reason: "idle",
+      reason: testCase.action === "closed" ? "thread-closed" : "idle",
     });
     const eventKey = `${testCase.type}:${testCase.action}`;
     registerInternalHook(eventKey, handler);
@@ -532,7 +709,9 @@ describe("session-memory hook", () => {
       },
       async () => {
         const { files } = await runNewWithPreviousSession({ events });
-        expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+        expect(files[0]).toMatch(
+          /^Event\/\d{4}-\d{2}-\d{2}_session-reset-[a-f0-9-]{36}_[0-9]+\.md$/,
+        );
       },
     );
 
@@ -566,8 +745,10 @@ describe("session-memory hook", () => {
         },
       });
 
-      expect(files).toEqual(["2025-12-31-2330.md"]);
-      expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15 America\/New_York/);
+      expect(files).toEqual([
+        expect.stringMatching(/^Event\/2025-12-31_session-reset-[a-f0-9-]{36}_1767241815000\.md$/),
+      ]);
+      expect(memoryContent).toContain("# Session: 2025-12-31 23:30:15 America/New_York");
       expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
     });
   });
@@ -592,43 +773,40 @@ describe("session-memory hook", () => {
         },
       });
 
-      expect(files).toEqual(["2026-01-02-0130.md"]);
-      expect(memoryContent).toMatch(/^# Session: 2026-01-02 01:30:15 Asia\/Jakarta/);
+      expect(files).toEqual([
+        expect.stringMatching(/^Event\/2026-01-02_session-reset-[a-f0-9-]{36}_1767292215000\.md$/),
+      ]);
+      expect(memoryContent).toContain("# Session: 2026-01-02 01:30:15 Asia/Jakarta");
     });
   });
 
-  it("keeps same-minute fallback timestamp captures by adding a filename suffix", async () => {
+  it("keeps concurrent same-millisecond captures as independent Events", async () => {
     await withEnvAsync({ TZ: "UTC" }, async () => {
       const tempDir = await createCaseWorkspace("workspace");
       const timestamp = new Date("2026-01-01T04:30:15.000Z");
 
-      await runNewWithPreviousSessionEntry({
-        tempDir,
-        timestamp,
-        previousSessionEntry: {
-          sessionId: "first-session",
-        },
-      });
-      await runNewWithPreviousSessionEntry({
-        tempDir,
-        timestamp,
-        previousSessionEntry: {
-          sessionId: "second-session",
-        },
-      });
+      await Promise.all(
+        ["first-session", "second-session"].map((sessionId) =>
+          runNewWithPreviousSessionEntry({
+            tempDir,
+            timestamp,
+            previousSessionEntry: { sessionId },
+          }),
+        ),
+      );
 
-      const memoryDir = path.join(tempDir, "memory");
+      const memoryDir = path.join(tempDir, "memory", "Event");
       const files = await fs.readdir(memoryDir);
       expect(files).toHaveLength(2);
-      expect(files).toContain("2026-01-01-0430.md");
-      expect(files).toContain("2026-01-01-0430-2.md");
-
-      await expect(
-        fs.readFile(path.join(memoryDir, "2026-01-01-0430.md"), "utf-8"),
-      ).resolves.toContain("- **Session ID**: first-session");
-      await expect(
-        fs.readFile(path.join(memoryDir, "2026-01-01-0430-2.md"), "utf-8"),
-      ).resolves.toContain("- **Session ID**: second-session");
+      const contents = await Promise.all(
+        files.map((file) => fs.readFile(path.join(memoryDir, file), "utf8")),
+      );
+      expect(
+        contents.filter((content) => content.includes("- **Session ID**: first-session")),
+      ).toHaveLength(1);
+      expect(
+        contents.filter((content) => content.includes("- **Session ID**: second-session")),
+      ).toHaveLength(1);
     });
   });
 

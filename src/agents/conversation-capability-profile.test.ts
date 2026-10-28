@@ -13,14 +13,70 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
+import {
+  buildConversationToolPolicyPipelineSteps,
+  projectConversationToolNames,
+  resolveConversationToolPolicies,
+} from "./conversation-tool-policy-pipeline.js";
 import { resolvePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-capability-profile-");
 
 describe("resolveConversationCapabilityProfile", () => {
+  it("preserves isolated project tools across wildcard policies and additional runtime grants", () => {
+    const capabilityProfile = resolveConversationCapabilityProfile({
+      isolatedWorkspace: true,
+      config: { tools: { allow: ["*"] } },
+      sandboxToolPolicy: { allow: ["*"] },
+      runtimePluginToolGrant: {
+        pluginId: "host",
+        toolNames: ["computer", "host__read", "sessions_spawn"],
+      },
+    });
+    const policies = resolveConversationToolPolicies({
+      capabilityProfile,
+      additionalPolicyAllow: ["computer", "host__read", "sessions_spawn"],
+    });
+    const names = [
+      "exec",
+      "process",
+      "write",
+      "memory_search",
+      "memory_context_read",
+      "memory_fragment_append",
+      "message",
+      "browser",
+      "computer",
+      "nodes",
+      "mobile_ui",
+      "host__read",
+      "lsp_hover",
+      "sessions_spawn",
+    ];
+    const result = applyToolPolicyPipeline({
+      tools: names.map((name) => ({ name })),
+      toolMeta: () => undefined,
+      warn: () => undefined,
+      steps: buildConversationToolPolicyPipelineSteps({
+        capabilityProfile,
+        policies,
+        includeRuntimeToolPolicy: true,
+      }),
+    });
+    expect(result.map((tool) => tool.name)).toEqual([
+      "exec",
+      "process",
+      "write",
+      "memory_search",
+      "memory_context_read",
+      "memory_fragment_append",
+      "message",
+    ]);
+  });
+
   it("intersects base and provider profile contributions from plugin manifests", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {

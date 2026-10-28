@@ -2,7 +2,10 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 // Memory Core helper module supports tools helpers behavior.
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import type { MemoryToolOptions } from "./memory-tool-contract.js";
 import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
+import { createMemoryContextReadTool } from "./tools.context-read.js";
+import { createMemoryFragmentAppendTool } from "./tools.fragment-append.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./tools.js";
 
 export function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
@@ -39,6 +42,32 @@ export function createMemoryGetToolOrThrow(
   config: OpenClawConfig = createDefaultMemoryToolConfig(),
 ) {
   const tool = createMemoryGetTool({ config });
+  if (!tool) {
+    throw new Error("tool missing");
+  }
+  return tool;
+}
+
+export function createMemoryContextReadToolOrThrow(
+  params: Pick<MemoryToolOptions, "assertMemoryAudienceCurrent" | "memoryAudience">,
+) {
+  const tool = createMemoryContextReadTool({
+    config: createDefaultMemoryToolConfig(),
+    ...params,
+  });
+  if (!tool) {
+    throw new Error("tool missing");
+  }
+  return tool;
+}
+
+export function createMemoryFragmentAppendToolOrThrow(
+  params: Pick<MemoryToolOptions, "assertMemoryAudienceCurrent" | "memoryAudience">,
+) {
+  const tool = createMemoryFragmentAppendTool({
+    config: createDefaultMemoryToolConfig(),
+    ...params,
+  });
   if (!tool) {
     throw new Error("tool missing");
   }

@@ -66,6 +66,7 @@ import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.j
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
+  resolveDiscordMemoryPolicy,
 } from "./group-policy.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { withAbortTimeout } from "./monitor/timeouts.js";
@@ -172,6 +173,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
       groups: {
         resolveRequireMention: resolveDiscordGroupRequireMention,
         resolveToolPolicy: resolveDiscordGroupToolPolicy,
+        resolveMemoryPolicy: resolveDiscordMemoryPolicy,
       },
       mentions: {
         stripPatterns: () => ["<@!?\\d+>"],

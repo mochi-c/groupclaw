@@ -1233,7 +1233,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	8
+src/agents/agent-tools.read.ts	7
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/agent-tools.schema.ts	3
 src/agents/ai-transport-runtime-host.ts	9
@@ -1575,7 +1575,7 @@ src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
-src/agents/workspace.ts	4
+src/agents/workspace.ts	3
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
@@ -2191,7 +2191,7 @@ src/gateway/worker-environments/workspace-manifest.ts	14
 src/gateway/worker-environments/workspace-result-staging.ts	2
 src/gateway/worker-workspace-conflict-transcript.ts	4
 src/gateway/ws-log.ts	3
-src/hooks/bundled/session-memory/handler.ts	9
+src/hooks/bundled/session-memory/handler.ts	7
 src/hooks/bundled/session-memory/transcript.ts	2
 src/hooks/frontmatter.ts	1
 src/hooks/gmail-setup-utils.ts	4

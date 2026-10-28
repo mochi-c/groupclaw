@@ -189,13 +189,14 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Default-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
   "agents.defaults.models.*.codeMode":
     "OpenClaw Code Mode for this exact provider/model: On forces it on, Off disables it, and Default inherits tools.codeMode.enabled. Agent-specific activation settings take precedence. This does not change the selected runtime or Codex native Code Mode.",
-  "memory.search": "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+  "memory.search":
+    "Vector search over memory/MEMORY.md and scoped memory Markdown (per-agent overrides supported).",
   "memory.search.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
   "memory.search.rememberAcrossConversations":
     'Use relevant context from this agent\'s other private conversations through protected transcript recall. Defaults on only when global session.dmScope is unset or "main" and no binding overrides DM scope; any configured DM isolation defaults it off. An explicit true or false always wins.',
   "memory.search.sources":
-    'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
+    'Chooses which sources are indexed: "memory" reads memory/MEMORY.md plus scoped memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "memory.search.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Entries may be path strings or objects with a root-relative glob pattern. When multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
   "memory.search.extraPaths.*.path":

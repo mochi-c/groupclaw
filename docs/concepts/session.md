@@ -80,6 +80,12 @@ If the same person contacts you from multiple channels, use
 they share a session.
 </Tip>
 
+Scoped User memory also uses declared links for platform participant identities.
+Linked aliases share one User memory identity within the conversation's admitted
+audience; matching display names do not link people. Local profile identities
+remain independent, and changing a link revokes retained background memory
+authority without rewriting Session participant records.
+
 Verify your setup with `openclaw security audit`.
 
 ## Retired channel docking

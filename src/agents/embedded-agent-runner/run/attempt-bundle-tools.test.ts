@@ -7,6 +7,7 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import { listPersistedRuntimeToolSchemaQuarantines } from "../../tool-schema-quarantine-health.js";
@@ -87,6 +88,23 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       },
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
   }
+
+  it("keeps client functions and host MCP/LSP acquisition outside an isolated project", async () => {
+    const input = createInput([], [createStubTool("exec")]);
+    input.setup.sandbox = createSandboxTestContext({
+      overrides: { isolatedWorkspace: true },
+    });
+    input.attempt.toolsAllow = ["*"];
+    input.attempt.config = { mcp: { servers: { host: { command: "unused" } } } };
+    input.attempt.clientTools = [
+      { type: "function", function: { name: "exec", parameters: { type: "object" } } },
+    ];
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+    expect(result.clientTools).toBeUndefined();
+    expect(mocks.acquireSessionMcpRuntime).not.toHaveBeenCalled();
+    expect(mocks.createBundleLspToolRuntime).not.toHaveBeenCalled();
+    expect(result.uncompactedEffectiveTools.map((tool) => tool.name)).toEqual(["exec"]);
+  });
 
   it.each([
     { allow: ["chrome*"], expected: ["chrome__click"] },

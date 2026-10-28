@@ -29,6 +29,7 @@ import { openMemoryCoreStateStore } from "./dreaming-state.js";
 import type { MemoryForgetReport } from "./memory-forget-report.js";
 import type { GroundedRemPreviewResult } from "./rem-evidence.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
+import { writeDailyMemoryNote } from "./short-term-promotion.test-support.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -240,9 +241,9 @@ describe("memory cli", () => {
   it("resets and rebuilds the real index without changing canonical session bytes or other owners", async () => {
     const stateDir = path.join(fixtureRoot, `reset-state-${workspaceCaseId++}`);
     const workspaceDir = path.join(fixtureRoot, `reset-workspace-${workspaceCaseId++}`);
-    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory", "MEMORY.md"),
       "# Memory\nThe observatory uses a copper telescope.\n",
     );
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -539,15 +540,6 @@ describe("memory cli", () => {
 
   async function recordRecall(workspaceDir: string, query: string, result: RecallResult) {
     await recordShortTermRecalls({ workspaceDir, query, results: [result] });
-  }
-
-  async function writeDailyMemoryNote(
-    workspaceDir: string,
-    date: string,
-    lines: string[],
-  ): Promise<void> {
-    const notePath = path.join(workspaceDir, "memory", `${date}.md`);
-    await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
   }
 
   async function writeHistory(workspaceDir: string, name: string, lines: string[]) {
@@ -1895,7 +1887,7 @@ describe("memory cli", () => {
         "",
       ].join("\n");
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory", "MEMORY.md"),
       [0, 1, 2, 3]
         .map((index) => promotionSection(`2026-04-${String(index + 1).padStart(2, "0")}`, index))
         .join("\n"),
@@ -1924,7 +1916,7 @@ describe("memory cli", () => {
 
     await runMemoryCli(["promote", "--apply", ...unrestrictedPromotion]);
 
-    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8");
     expect(memory).toContain("Retain the release checklist.");
     expect(memory.length).toBeLessThanOrEqual(1_400);
   });
@@ -1936,7 +1928,7 @@ describe("memory cli", () => {
       const workspaceAliasDir = `${workspaceDir}-alias`;
       await fs.symlink(workspaceDir, workspaceAliasDir, "dir");
       const existingMemory = `# Long-Term Memory\n\n${"x".repeat(9_100)}\n`;
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), existingMemory, "utf-8");
+      await fs.writeFile(path.join(workspaceDir, "memory", "MEMORY.md"), existingMemory, "utf-8");
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Shared workspace fact."]);
       await recordShortTermRecalls({
         workspaceDir: workspaceAliasDir,
@@ -1975,7 +1967,9 @@ describe("memory cli", () => {
       expect(payload?.apply.rejectedCandidates).toEqual([
         expect.objectContaining({ reason: expect.stringContaining("budget") }),
       ]);
-      expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).toBe(existingMemory);
+      expect(await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf-8")).toBe(
+        existingMemory,
+      );
     },
   );
 
@@ -2118,7 +2112,7 @@ describe("memory cli", () => {
       payload?.apply.rejectedCandidates.map((rejection) => rejection.candidate.startLine),
     ).toEqual([3]);
 
-    const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+    const memory = await fs.readFile(path.join(workspaceDir, "memory", "MEMORY.md"), "utf8");
     expect(memory).toContain("Lower-score trusted candidate.");
     expect(memory).not.toContain("High-score untrusted candidate.");
     expect(memory).not.toContain("High-score rare trusted candidate.");
@@ -2128,7 +2122,7 @@ describe("memory cli", () => {
       delete entry.promotedAt;
     }
     await shortTermTesting.writeRawRecallStore(workspaceDir, store);
-    await fs.rm(path.join(workspaceDir, "MEMORY.md"), { force: true });
+    await fs.rm(path.join(workspaceDir, "memory", "MEMORY.md"), { force: true });
 
     mockManager(manager);
     const log = spyRuntimeLogs(defaultRuntime);

@@ -14,6 +14,7 @@ import {
   serializeMemoryHostEventExport,
 } from "../memory-host-sdk/event-export.js";
 import { listStoredMemoryHostEvents } from "../memory-host-sdk/event-store.js";
+import { WORKSPACE_MEMORY_RELATIVE_PATH } from "../memory/scoped-memory.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
@@ -380,24 +381,6 @@ async function listMemoryWorkspacePublicArtifacts(params: {
   agentIds: string[];
 }): Promise<MemoryPluginPublicArtifact[]> {
   const artifacts: MemoryPluginPublicArtifact[] = [];
-  const workspaceEntries = new Set(
-    (await fs.readdir(params.workspaceDir, { withFileTypes: true }).catch(() => []))
-      .filter((entry) => entry.isFile())
-      .map((entry) => entry.name),
-  );
-
-  if (workspaceEntries.has("MEMORY.md")) {
-    const absolutePath = path.join(params.workspaceDir, "MEMORY.md");
-    artifacts.push({
-      kind: "memory-root",
-      workspaceDir: params.workspaceDir,
-      relativePath: "MEMORY.md",
-      absolutePath,
-      agentIds: [...params.agentIds],
-      contentType: "markdown",
-    });
-  }
-
   const memoryDir = path.join(params.workspaceDir, "memory");
   const memoryFiles = await walkDirectory(memoryDir, {
     symlinks: "skip",
@@ -408,7 +391,12 @@ async function listMemoryWorkspacePublicArtifacts(params: {
   )) {
     const relativePath = path.relative(params.workspaceDir, absolutePath).replace(/\\/g, "/");
     artifacts.push({
-      kind: relativePath.startsWith("memory/dreaming/") ? "dream-report" : "daily-note",
+      kind:
+        relativePath === WORKSPACE_MEMORY_RELATIVE_PATH
+          ? "memory-root"
+          : relativePath.startsWith("memory/dreaming/")
+            ? "dream-report"
+            : "daily-note",
       workspaceDir: params.workspaceDir,
       relativePath,
       absolutePath,

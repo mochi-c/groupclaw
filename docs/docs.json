@@ -1669,6 +1669,7 @@
                     "pages": [
                       "concepts/memory",
                       "concepts/memory-architecture",
+                      "reference/scoped-memory-design",
                       "concepts/memory-provenance",
                       "concepts/user-model",
                       "concepts/standing-intents",

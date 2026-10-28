@@ -48,7 +48,7 @@ describe("memory forget worker settlement", () => {
       db.exec("DROP TABLE IF EXISTS memory_entry_origins");
     }
     db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
-    const memoryPath = path.join(fixture.workspaceDir, "MEMORY.md");
+    const memoryPath = path.join(fixture.workspaceDir, "memory", "MEMORY.md");
     const retained = "# Memory\nKeep the unrelated amber fact.\n";
     const selected = withOrigins
       ? "<!-- openclaw-memory-promotion:selected-entry -->\n- Private violet fact.\n"

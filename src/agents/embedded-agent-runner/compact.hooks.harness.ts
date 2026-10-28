@@ -855,11 +855,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   mockCompactHooksSkills(resolveSkillsPromptMock);
 
   vi.doMock("../agent-scope.js", async () => {
-    const { listAgentIds } = await import("../agent-scope-config.js");
+    const actual = await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
     return {
-      listAgentEntries: vi.fn(() => []),
-      listAgentEntriesWithSource: vi.fn(() => []),
-      listAgentIds,
+      ...actual,
       resolveAgentConfig: resolveAgentConfigMock,
       resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) =>
         join(fixture.workspaceDir, "agents", agentId, "agent"),

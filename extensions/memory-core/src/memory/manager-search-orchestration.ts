@@ -30,6 +30,7 @@ import {
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
+import type { MemoryPathFilter } from "./manager-search-shared.js";
 import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
@@ -125,7 +126,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
-    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal };
+    const keywordOptions = {
+      boostFallbackRanking: true,
+      signal: opts?.signal,
+      memoryPathFilter: opts?.memoryPathFilter,
+    };
     let preparedKeyword: MemoryKeywordWorkerResult | undefined;
     let releaseGeneration: (() => Promise<void>) | undefined;
     const releaseReadGeneration = async () => {
@@ -544,6 +549,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             vectorProviderIdentity,
             indexState,
             opts?.signal,
+            opts?.memoryPathFilter,
           ).catch((err: unknown) => {
             opts?.signal?.throwIfAborted();
             if (err instanceof WorkerTaskError && err.code === "overloaded") {
@@ -628,6 +634,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     providerIdentity: { model: string; aliases: string[] },
     indexState: MemoryRetrievalIndexState,
     signal?: AbortSignal,
+    memoryPathFilter?: MemoryPathFilter,
   ): Promise<Array<MemoryRetrievalResult & { id: string }>> {
     const results = await searchVector({
       vectorTable: VECTOR_TABLE,
@@ -637,6 +644,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       signal,
+      memoryPathFilter,
       ensureVectorReady: async (dimensions) => {
         if (!this.vector.enabled) {
           return false;
@@ -666,6 +674,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             limit,
             snippetMaxChars: SNIPPET_MAX_CHARS,
             sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
+            memoryPathFilter,
           },
           signal,
         ),

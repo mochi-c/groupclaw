@@ -63,6 +63,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
       bootstrapUserProfileId: attempt.bootstrapUserProfileId,
+      memoryAudience: workspaceDir === bootstrapWorkspaceDir ? attempt.memoryAudience : undefined,
       chatType: attempt.chatType,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,
@@ -139,6 +140,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       return {
         bootstrapFiles: layeredBootstrapFiles,
         contextFiles: buildBootstrapContextForFiles(layeredBootstrapFiles, {
+          workspaceDir: bootstrapWorkspaceDir,
           config: attempt.config,
           agentId: params.setup.sessionAgentId,
           warn: bootstrapWarn,

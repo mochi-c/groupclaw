@@ -266,6 +266,17 @@ the existing executor between commands without holding a writer turn across
 preparation. Each command keeps its own live authority checks. Omit the option
 for cached stores whose lifetime can outlast accepted work.
 
+### Memory search narrowing
+
+`MemorySearchManager.search` accepts an optional `memoryPathFilter` with
+workspace-relative `exactPaths` and `directoryPrefixes`. Matching is
+case-sensitive and applies to memory-file candidates before retrieval limits.
+`includeOutsideMemory: true` also retains operator-configured shared files
+outside `memory/`. Session transcript candidates keep their own visibility
+contract. The filter is a retrieval hint, not an access grant; callers must
+authorize final results and partial keyword snapshots. Memory Core applies
+the same predicate to body, filename, vector, and KNN fallback queries.
+
 ### Memory runtime replacement
 
 Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`

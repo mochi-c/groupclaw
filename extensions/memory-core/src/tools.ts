@@ -16,6 +16,10 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
+  decodeMemoryArtifactReference,
+  encodeMemoryArtifactReference,
+} from "./memory-artifact-reference.js";
+import {
   attemptMemoryCorpus,
   composeMemoryCorpusMetadata,
   runMemoryCorpusDeadline,
@@ -31,6 +35,7 @@ import {
 } from "./memory-search-tool-query.js";
 import {
   MEMORY_GET_TOOL_CONTRACT,
+  MEMORY_READ_TOOL_CONTRACT,
   MEMORY_SEARCH_TOOL_CONTRACT,
   type MemoryToolOptions,
 } from "./memory-tool-contract.js";
@@ -39,6 +44,7 @@ import {
   resolveMemorySearchAbortError,
   runMemorySearchWithDeadline,
 } from "./memory/search-deadline.js";
+import { isConversationScopedMemoryPath } from "./scoped-memory-visibility.js";
 import {
   buildMemorySearchPresentation,
   resolveMemoryCitationsMode,
@@ -228,7 +234,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
     options,
     contract: MEMORY_SEARCH_TOOL_CONTRACT,
     execute:
-      ({ cfg, agentId, settings }) =>
+      ({ cfg, agentId, settings, memorySearchContext, assertMemorySearchCurrent }) =>
       async (_toolCallId, params, callerSignal) => {
         const rawParams = asToolParamsRecord(params);
         if (callerSignal?.aborted) {
@@ -336,6 +342,13 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                   sessionKey: options.agentSessionKey,
                   activeProjectKeys: options.activeProjectKeys,
                   conversationRecall: options.conversationRecall,
+                  ...((memorySearchContext ?? options.memoryAudience?.context)
+                    ? {
+                        memoryAudienceContext:
+                          memorySearchContext ?? options.memoryAudience?.context,
+                      }
+                    : {}),
+                  assertSearchCurrent: assertMemorySearchCurrent,
                 },
                 visibility: { cfg, agentId, sandboxed: options.sandboxed === true },
                 signal,
@@ -473,6 +486,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                   mode: citationsMode,
                   sessionKey: options.agentSessionKey,
                 }),
+                agentId,
               );
               const dreaming = resolveMemoryDreamingConfig({
                 pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
@@ -567,18 +581,55 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
 }
 
 export function createMemoryGetTool(options: MemoryToolOptions) {
+  return createExactMemoryReadTool(options, MEMORY_GET_TOOL_CONTRACT);
+}
+
+export function createMemoryReadTool(options: MemoryToolOptions) {
+  return createExactMemoryReadTool(options, MEMORY_READ_TOOL_CONTRACT);
+}
+
+function createExactMemoryReadTool(
+  options: MemoryToolOptions,
+  contract: typeof MEMORY_GET_TOOL_CONTRACT | typeof MEMORY_READ_TOOL_CONTRACT,
+) {
   return createMemoryTool({
     options,
-    contract: MEMORY_GET_TOOL_CONTRACT,
+    contract,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, memorySearchContext }) =>
       async (_toolCallId, params, callerSignal) => {
         const rawParams = asToolParamsRecord(params);
-        const relPath = readStringParam(rawParams, "path", { required: true });
-        const from = readPositiveIntegerParam(rawParams, "from");
-        const lines = readPositiveIntegerParam(rawParams, "lines");
-        const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
+        const expandsReference = contract.name === "memory_read";
+        const reference = expandsReference
+          ? decodeMemoryArtifactReference(readStringParam(rawParams, "ref", { required: true }))
+          : undefined;
+        if (reference === null) {
+          return jsonResult({
+            status: "error",
+            text: "",
+            code: "MEMORY_REFERENCE_INVALID",
+            error:
+              "Invalid memory-file reference. Use a ref returned by memory_search or memory_read.",
+          });
+        }
+        const relPath =
+          reference?.relPath ?? readStringParam(rawParams, "path", { required: true });
+        const from = readPositiveIntegerParam(rawParams, "from") ?? reference?.from;
+        const lines = readPositiveIntegerParam(rawParams, "lines") ?? reference?.lines;
+        const requestedCorpus = expandsReference
+          ? "memory"
+          : readCorpusParam(rawParams, ["memory", "wiki", "all"]);
         const { readAgentMemoryFile } = await loadMemoryToolRuntime();
+        callerSignal?.throwIfAborted();
+        options.assertMemoryAudienceCurrent?.();
+        // Conversation turns read only their admitted scope; a path outside
+        // it answers not_found so other conversations' existence never leaks.
+        const scopeContext = memorySearchContext ?? options.memoryAudience?.context;
+        const memoryPathInScope =
+          (!reference || reference.agentId === agentId) &&
+          (!scopeContext ||
+            requestedCorpus === "wiki" ||
+            isConversationScopedMemoryPath(relPath, scopeContext));
         const request = {
           relPath,
           from: from ?? undefined,
@@ -592,17 +643,36 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
         if (requestedCorpus === "wiki") {
           return await executeWikiMemoryReadResult(request);
         }
-        return await executeMemoryReadResult({
-          read: async () =>
-            await readAgentMemoryFile({
+        const result = await executeMemoryReadResult({
+          read: async () => {
+            if (!memoryPathInScope) {
+              return { status: "not_found" as const, text: "" as const, path: relPath };
+            }
+            const read = await readAgentMemoryFile({
               cfg,
               agentId,
               relPath,
               from: from ?? undefined,
               lines: lines ?? undefined,
-            }),
+              rejectAliases: Boolean(scopeContext),
+            });
+            return reference && read.status === "ok" && read.nextFrom
+              ? {
+                  ...read,
+                  nextRef: encodeMemoryArtifactReference({
+                    agentId,
+                    relPath,
+                    from: read.nextFrom,
+                    lines: lines ?? reference.lines,
+                  }),
+                }
+              : read;
+          },
           ...request,
         });
+        options.assertMemoryAudienceCurrent?.();
+        callerSignal?.throwIfAborted();
+        return result;
       },
   });
 }

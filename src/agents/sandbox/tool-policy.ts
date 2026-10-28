@@ -13,6 +13,30 @@ import {
   type SandboxToolPolicySource,
 } from "./types.js";
 
+/** These tools either use the project bridge or an existing host-owned conversation boundary. */
+export const ISOLATED_WORKSPACE_TOOL_ALLOW = [
+  "exec",
+  "process",
+  "read",
+  "ls",
+  "write",
+  "edit",
+  "apply_patch",
+  "view_image",
+  "message",
+  "web_search",
+  "web_fetch",
+  "session_status",
+  "memory_search",
+  "memory_get",
+  "memory_read",
+  "memory_context_read",
+  "memory_fragment_append",
+  "tool_search",
+  "tool_describe",
+  "tool_call",
+] as const;
+
 function pickConfiguredList(
   field: keyof ToolAllowDenyPolicyConfig,
   agent?: ToolAllowDenyPolicyConfig,

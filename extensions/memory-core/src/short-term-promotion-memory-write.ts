@@ -12,7 +12,7 @@ import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-works
 
 type MemoryFileCommit = Parameters<
   NonNullable<MemoryWorkspaceFiles["maintenance"]>["commitContent"]
->[0];
+>[0] & { assertCurrent?: () => void };
 
 export function buildPromotionMarker(candidateKey: string): string {
   return `<!-- openclaw-memory-promotion:${candidateKey} -->`;
@@ -99,6 +99,7 @@ async function writeExistingMemoryInPlace(params: {
   expectedContent: string;
   content: string;
   conflictMessage?: string;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
   if ((await readMemoryContent(params.filePath)) !== params.expectedContent) {
     throw new MemoryWriteConflictError(params.conflictMessage);
@@ -110,23 +111,27 @@ async function writeExistingMemoryInPlace(params: {
     return false;
   }
   try {
-    await handle.writeFile(params.content, { encoding: "utf-8" });
-    await handle.truncate(Buffer.byteLength(params.content));
-    await handle.sync();
-    return true;
-  } catch (error) {
-    const original = Buffer.from(params.expectedContent, "utf-8");
+    params.assertCurrent?.();
     try {
-      await writeFileWindowFully(handle, original, 0);
-      await handle.truncate(original.length);
+      await handle.writeFile(params.content, { encoding: "utf-8" });
+      params.assertCurrent?.();
+      await handle.truncate(Buffer.byteLength(params.content));
       await handle.sync();
-    } catch (restoreError) {
-      throw new Error(
-        `${path.basename(params.filePath)} in-place write failed and restoring the original content also failed`,
-        { cause: restoreError },
-      );
+      return true;
+    } catch (error) {
+      const original = Buffer.from(params.expectedContent, "utf-8");
+      try {
+        await writeFileWindowFully(handle, original, 0);
+        await handle.truncate(original.length);
+        await handle.sync();
+      } catch (restoreError) {
+        throw new Error(
+          `${path.basename(params.filePath)} in-place write failed and restoring the original content also failed`,
+          { cause: restoreError },
+        );
+      }
+      throw error;
     }
-    throw error;
   } finally {
     await handle.close();
   }
@@ -139,12 +144,15 @@ export function hashMemoryContent(content: string): string {
 export async function commitMemoryContent(
   params: MemoryFileCommit & { workspaceDir?: string },
 ): Promise<void> {
+  params.assertCurrent?.();
   const files = params.workspaceDir
     ? getMemoryWorkspaceMaintenance(params.workspaceDir)
     : undefined;
   if (files) {
-    const { workspaceDir: _workspaceDir, ...request } = params;
+    // Remote admission owns dispatched-write settlement; the local grant stays off IPC.
+    const { workspaceDir: _workspaceDir, assertCurrent, ...request } = params;
     try {
+      assertCurrent?.();
       return await files.commitContent(request);
     } catch (error) {
       // Preserve the native caller's conflict and publication handling across IPC.
@@ -167,6 +175,7 @@ export async function commitMemoryContent(
       throw new MemoryWriteConflictError(params.conflictMessage);
     }
     // Unlink is atomic; the preimage check preserves external edits made after planning.
+    params.assertCurrent?.();
     await fs.unlink(params.filePath);
     return;
   }
@@ -187,6 +196,7 @@ export async function commitMemoryContent(
       syncTempFile: true,
       syncParentDir: true,
       throwOnCleanupError: true,
+      assertBeforeMutation: params.assertCurrent,
       beforeRename: async () => {
         if (
           params.expectedHash &&
@@ -245,6 +255,7 @@ export async function commitMemoryContent(
         expectedContent: params.expectedContent,
         content: params.content,
         conflictMessage: params.conflictMessage,
+        assertCurrent: params.assertCurrent,
       }))
     ) {
       if (publication.state === "uncertain" || publication.state === "committed") {

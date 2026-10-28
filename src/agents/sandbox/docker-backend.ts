@@ -195,13 +195,17 @@ function createContainerSandboxBackendHandle(params: {
       containerName: params.containerId,
       podmanTarget: params.podmanTarget,
       ...command,
-      assertCurrent,
+      assertCurrent: () => {
+        assertCurrent?.();
+        command.assertCurrent?.();
+      },
     });
   return {
     id: params.engine.id,
     runtimeId: params.containerName,
     runtimeLabel: params.containerName,
     workdir: params.workdir,
+    supportsCommandAuthority: true,
     env: params.env,
     configLabel: params.image,
     configLabelKind: "Image",
@@ -251,6 +255,7 @@ function createContainerSandboxBackendHandle(params: {
               )
             : argv,
           env: process.env,
+          assertCurrent: params.assertCurrent,
           stdinMode: usePty ? "pipe-open" : "pipe-closed",
           finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
         };

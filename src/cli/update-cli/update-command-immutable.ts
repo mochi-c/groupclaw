@@ -161,6 +161,26 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
             : activation === "planned"
               ? "Would activate the prepared generation under the enabled adoption record."
               : "No immutable activation was needed.";
+  let cleanup:
+    | Awaited<
+        ReturnType<
+          typeof import("../../infra/update-immutable-cleanup.js").cleanupImmutableGenerations
+        >
+      >
+    | undefined;
+  if (
+    result.status === "already-current" ||
+    (typeof activation !== "string" && activation.status === "succeeded")
+  ) {
+    try {
+      const { cleanupImmutableGenerations } =
+        await import("../../infra/update-immutable-cleanup.js");
+      cleanup = await cleanupImmutableGenerations({ root: installation.root });
+      result.warnings.push(...cleanup.warnings);
+    } catch (error) {
+      result.warnings.push(`Generation cleanup deferred: ${formatErrorMessage(error)}.`);
+    }
+  }
   if (opts.json) {
     defaultRuntime.writeJson({
       ...result,
@@ -169,6 +189,7 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
         : {}),
       installKind: "immutable",
       activation,
+      ...(cleanup ? { cleanup } : {}),
       receipts,
       message,
     });
@@ -198,6 +219,31 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     exitFailedActivation(activation);
   }
   return true;
+}
+
+export async function updateCleanupImmutableCommand(opts: {
+  root: string;
+  dryRun?: boolean;
+  json?: boolean;
+}): Promise<void> {
+  try {
+    const { cleanupImmutableGenerations } = await import("../../infra/update-immutable-cleanup.js");
+    const result = await cleanupImmutableGenerations(opts);
+    if (opts.json) {
+      defaultRuntime.writeJson({ ...result, installKind: "immutable" });
+    } else {
+      defaultRuntime.log(
+        opts.dryRun
+          ? `${result.eligible.length} obsolete immutable generation(s) eligible for cleanup.`
+          : `Removed ${result.removed.length} obsolete immutable generation(s).`,
+      );
+      for (const warning of result.warnings) {
+        defaultRuntime.error(`Warning: ${warning}`);
+      }
+    }
+  } catch (error) {
+    reportImmutableFailure(error, opts.json, "immutable-cleanup-refused");
+  }
 }
 
 export async function updateAdoptImmutableCommand(

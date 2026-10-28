@@ -35,6 +35,8 @@ export async function readMemoryFile(params: {
   lines?: number;
   defaultLines?: number;
   maxChars?: number;
+  /** Scoped callers authorize this exact path, never an aliased source. */
+  rejectAliases?: boolean;
 }): Promise<MemoryReadResult> {
   const rawPath = params.relPath.trim();
   if (!rawPath) {
@@ -49,9 +51,9 @@ export async function readMemoryFile(params: {
   const notFound = (): MemoryReadResult => ({ status: "not_found", text: "", path: relPath });
   const readFromRoot = async (directory: string): Promise<MemoryReadResult> => {
     const filesystem = await root(directory, {
-      hardlinks: "allow",
+      hardlinks: params.rejectAliases ? "reject" : "allow",
       maxBytes: Infinity,
-      symlinks: allowedWorkspace ? "follow-parents-within-root" : "reject",
+      symlinks: allowedWorkspace && !params.rejectAliases ? "follow-parents-within-root" : "reject",
     });
     let content: string;
     try {
@@ -158,6 +160,7 @@ export async function readAgentMemoryFile(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  rejectAliases?: boolean;
 }): Promise<MemoryReadResult> {
   const settings = resolveMemoryHostSearchPathConfig(params.cfg, params.agentId);
   if (!settings) {
@@ -173,5 +176,6 @@ export async function readAgentMemoryFile(params: {
     from: params.from,
     lines: params.lines,
     maxChars: contextLimits?.memoryGetMaxChars,
+    rejectAliases: params.rejectAliases,
   });
 }

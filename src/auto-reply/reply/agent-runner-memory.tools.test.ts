@@ -1,6 +1,7 @@
 // Provider-owned pre-compaction persistence through detached maintenance turns.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -12,7 +13,13 @@ import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceTranscriptEvents,
+} from "../../config/sessions/session-accessor.js";
+import { createSessionTranscriptHeader } from "../../config/sessions/transcript-header.js";
+import sessionMemoryHandler from "../../hooks/bundled/session-memory/handler.js";
+import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { assertMemoryAudienceSession } from "../../plugins/memory-audience.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -137,7 +144,7 @@ describe("provider-owned memory flush", () => {
 
   // Tools-arm fixtures use a real host audience and registry slot marker; the
   // existing file-arm fixtures intentionally have neither of these grants.
-  function registerToolsFlushPlan(sidecar = false) {
+  function registerToolsFlushPlan(sidecar = false, fileRuntime = false) {
     const registry = createEmptyPluginRegistry();
     const providerFlushPlanResolver = () => ({
       softThresholdTokens: 4_000,
@@ -151,12 +158,19 @@ describe("provider-owned memory flush", () => {
     registry.memoryCapabilities.push({
       pluginId: "knowledge",
       memorySlotSelected: true,
-      // A native slot owner registers the provider-neutral runtime with its tools plan.
       capability: sidecar
         ? {}
         : {
             providerFlushPlanResolver,
-            providerRuntime: { open: vi.fn(async () => ({ provider: null })) },
+            ...(fileRuntime
+              ? {
+                  runtime: {
+                    supportsMemoryAudience: true as const,
+                    getMemorySearchManager: async () => ({ manager: null }),
+                    resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
+                  },
+                }
+              : { providerRuntime: { open: vi.fn(async () => ({ provider: null })) } }),
           },
     });
     if (sidecar) {
@@ -257,47 +271,50 @@ describe("provider-owned memory flush", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
-  it("delegates the source audience to detached tools flushes with source sandbox policy", async () => {
-    registerToolsFlushPlan();
-    const { entry, overrides } = await createToolsFlushFixture();
-    runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      expect(params).toMatchObject({
-        sessionPersistence: "detached",
-        senderIsOwner: false,
-        sandboxSessionKey: overrides.sessionKey,
-        memoryAudience: { kind: "owner-private", agentId: "main" },
-        memoryFlushTools: {
-          ownerPluginId: "knowledge",
-          persistenceToolNames: ["knowledge_save_page"],
-          lookupToolNames: ["knowledge_grep"],
-          flushId: expect.any(String),
-        },
+  it.each(["native", "file-backed"])(
+    "delegates the source audience to a detached %s tools flush with source sandbox policy",
+    async (runtimeKind) => {
+      registerToolsFlushPlan(false, runtimeKind === "file-backed");
+      const { entry, overrides } = await createToolsFlushFixture();
+      runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        expect(params).toMatchObject({
+          sessionPersistence: "detached",
+          senderIsOwner: false,
+          sandboxSessionKey: overrides.sessionKey,
+          memoryAudience: { kind: "owner-private", agentId: "main" },
+          memoryFlushTools: {
+            ownerPluginId: "knowledge",
+            persistenceToolNames: ["knowledge_save_page"],
+            lookupToolNames: ["knowledge_grep"],
+            flushId: expect.any(String),
+          },
+        });
+        expect(params.sessionId).not.toBe(entry.sessionId);
+        expect(isInternalSessionEffectsKey(params.sessionKey ?? "")).toBe(true);
+        expect(params.memoryFlushWritePath).toBeUndefined();
+        if (!params.memoryAudience) {
+          throw new Error("source memory audience missing");
+        }
+        expect(() =>
+          assertMemoryAudienceSession(params.memoryAudience!, params.sessionKey),
+        ).not.toThrow();
+        expect(() =>
+          assertMemoryAudienceSession(params.memoryAudience!, overrides.sessionKey),
+        ).toThrow("bound to a different session");
+        await executePersistenceTool(params);
+        return { payloads: [], meta: {} };
       });
-      expect(params.sessionId).not.toBe(entry.sessionId);
-      expect(isInternalSessionEffectsKey(params.sessionKey ?? "")).toBe(true);
-      expect(params.memoryFlushWritePath).toBeUndefined();
-      if (!params.memoryAudience) {
-        throw new Error("source memory audience missing");
-      }
-      expect(() =>
-        assertMemoryAudienceSession(params.memoryAudience!, params.sessionKey),
-      ).not.toThrow();
-      expect(() =>
-        assertMemoryAudienceSession(params.memoryAudience!, overrides.sessionKey),
-      ).toThrow("bound to a different session");
-      await executePersistenceTool(params);
-      return { payloads: [], meta: {} };
-    });
 
-    const result = await runDefaultMemoryFlush(entry, {
-      ...overrides,
-      cfg: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
-    });
+      const result = await runDefaultMemoryFlush(entry, {
+        ...overrides,
+        cfg: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+      });
 
-    expect(result.outcome).toBe("completed");
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(fs.existsSync(path.join(rootDir, "memory"))).toBe(false);
-  });
+      expect(result.outcome).toBe("completed");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(fs.existsSync(path.join(rootDir, "memory"))).toBe(false);
+    },
+  );
 
   it("keeps a tools flush ID across fallback and retry, then changes it after compaction", async () => {
     registerToolsFlushPlan();
@@ -344,6 +361,137 @@ describe("provider-owned memory flush", () => {
     expect(requireEmbeddedAgentCall(2).sessionKey).not.toBe(requireEmbeddedAgentCall(0).sessionKey);
     expect(requireEmbeddedAgentCall(3).memoryFlushTools?.flushId).not.toBe(firstId);
   });
+
+  it.each([
+    { outcome: "completed", change: "none" },
+    { outcome: "failed", change: "none" },
+    { outcome: "skipped", change: "none" },
+    { outcome: "completed", change: "revoked" },
+    { outcome: "failed", change: "revoked" },
+    { outcome: "completed", change: "edited" },
+  ] as const)(
+    "starts a source Thread Event before inference and settles $outcome safely ($change)",
+    async ({ outcome, change }) => {
+      registerToolsFlushPlan(false, true);
+      const { entry, overrides } = await createToolsFlushFixture({
+        chatType: "channel",
+        delivery: {
+          kind: "external",
+          route: { channel: "discord", target: { to: "channel:101" } },
+          context: { channel: "discord", to: "channel:101" },
+          origin: {
+            provider: "discord",
+            nativeChannelId: "101",
+            nativeParentChannelId: "100",
+            threadId: "101",
+          },
+        },
+      });
+      const conversationText = "Keep this source conversation out of framework Event payloads.";
+      await replaceTranscriptEvents(
+        {
+          agentId: "main",
+          sessionId: entry.sessionId,
+          sessionKey: overrides.sessionKey,
+          storePath: overrides.storePath,
+        },
+        [
+          createSessionTranscriptHeader({ sessionId: entry.sessionId, cwd: rootDir }),
+          {
+            type: "message",
+            id: "source-user",
+            parentId: null,
+            message: {
+              role: "user",
+              content: conversationText,
+              __openclaw: { senderIsOwner: true },
+            },
+          },
+        ],
+      );
+      let initialEvent: string | undefined;
+      let initialEventPath: string | undefined;
+      runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        expect(JSON.stringify(params.sessionManager?.buildSessionContext().messages)).toContain(
+          conversationText,
+        );
+        const eventFiles = fs
+          .readdirSync(path.join(rootDir, "memory"), { recursive: true, encoding: "utf8" })
+          .filter((file) => file.endsWith(".md"));
+        expect(eventFiles).toHaveLength(1);
+        initialEventPath = path.join(
+          rootDir,
+          "memory",
+          expectDefined(eventFiles[0], "started flush Event"),
+        );
+        initialEvent = fs.readFileSync(initialEventPath, "utf8");
+        expect(initialEvent).toContain("status: processing");
+        expect(initialEvent).not.toContain("outcome:");
+        if (outcome === "failed") {
+          if (change === "revoked") {
+            await writeTestSessionStore(overrides.storePath, overrides.sessionKey, {
+              ...entry,
+              lifecycleRevision: "replacement-incarnation",
+            });
+          }
+          throw new Error("model unavailable");
+        }
+        if (outcome === "skipped") {
+          assertMemoryFlushPersistenceToolAvailable([], params.memoryFlushTools);
+        }
+        await executePersistenceTool(params);
+        if (change === "revoked") {
+          await writeTestSessionStore(overrides.storePath, overrides.sessionKey, {
+            ...entry,
+            lifecycleRevision: "replacement-incarnation",
+          });
+        } else if (change === "edited") {
+          fs.appendFileSync(initialEventPath, "\nHuman annotation: preserve this evidence.\n");
+        }
+        return { payloads: [], meta: {} };
+      });
+      registerInternalHook("session:memory-flush", sessionMemoryHandler);
+      try {
+        const result = await runDefaultMemoryFlush(entry, overrides);
+        expect(result.outcome).toBe(outcome);
+      } finally {
+        unregisterInternalHook("session:memory-flush", sessionMemoryHandler);
+      }
+      const files = fs
+        .readdirSync(path.join(rootDir, "memory"), { recursive: true, encoding: "utf8" })
+        .filter((file) => file.endsWith(".md"))
+        .map((file) => file.replaceAll(path.sep, "/"));
+      expect(files).toHaveLength(1);
+      expect(files[0]).toMatch(
+        /^Channel\/id-[a-f0-9]{64}\/Thread\/id-[a-f0-9]{64}\/Event\/.*\.md$/,
+      );
+      const event = fs.readFileSync(
+        path.join(rootDir, "memory", expectDefined(files[0], "flush Event path")),
+        "utf8",
+      );
+      expect(event).toContain("eventType: memory.pre-compaction-flush");
+      expect(initialEvent).toBeDefined();
+      expect(event.match(/^eventId: .+$/m)?.[0]).toBe(initialEvent?.match(/^eventId: .+$/m)?.[0]);
+      expect(event.match(/^createdAt: .+$/m)?.[0]).toBe(
+        initialEvent?.match(/^createdAt: .+$/m)?.[0],
+      );
+      if (change === "revoked") {
+        expect(event).toBe(initialEvent);
+        expect(loadSessionEntry(overrides)?.memoryFlush).toBeUndefined();
+      } else if (change === "edited") {
+        expect(event).toBe(`${initialEvent}\nHuman annotation: preserve this evidence.\n`);
+      } else {
+        expect(event).toContain(`outcome: ${outcome}`);
+        expect(event).toContain(`status: ${outcome === "failed" ? "failed" : "completed"}`);
+        expect(event).toContain("updatedAt:");
+      }
+      expect(event).toContain(`sessionId: "${entry.sessionId}"`);
+      expect(event).toContain(`sessionKey: "${overrides.sessionKey}"`);
+      expect(event).toContain(`flushId: "${requireEmbeddedAgentCall().memoryFlushTools?.flushId}"`);
+      expect(event).not.toContain("## Conversation Summary");
+      expect(event).not.toContain(conversationText);
+    },
+  );
 
   it("gives a reset session incarnation a new tools flush ID", async () => {
     registerToolsFlushPlan();

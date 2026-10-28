@@ -29,7 +29,7 @@ describe("memory chunk publication", () => {
   it.each(["none", "batch-wide-test"])(
     "publishes oversized entry annotations without caller-thread index writes (%s)",
     async (provider) => {
-      const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+      const memoryPath = path.join(fixture.paths.memory, "MEMORY.md");
       await fs.writeFile(
         memoryPath,
         [
@@ -65,7 +65,7 @@ describe("memory chunk publication", () => {
                ON metadata.chunk_id = chunk.id
              LEFT JOIN memory_index_chunk_provenance AS provenance
                ON provenance.chunk_id = chunk.id
-             WHERE chunk.path = 'MEMORY.md' AND chunk.source = 'memory'
+             WHERE chunk.path = 'memory/MEMORY.md' AND chunk.source = 'memory'
              ORDER BY chunk.start_line, chunk.id`,
           )
           .all();
@@ -93,13 +93,13 @@ describe("memory chunk publication", () => {
           emptyPrepare.mockRestore();
         }
         expect(
-          db.prepare("SELECT id FROM memory_index_chunks WHERE path = 'MEMORY.md'").all(),
+          db.prepare("SELECT id FROM memory_index_chunks WHERE path = 'memory/MEMORY.md'").all(),
         ).toEqual([]);
         expect(
-          db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'MEMORY.md'").get(),
+          db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/MEMORY.md'").get(),
         ).toBeDefined();
         const results = await manager.search("alpha-fragment-body", { lexicalOnly: true });
-        expect(results.map((result) => result.path)).not.toContain("MEMORY.md");
+        expect(results.map((result) => result.path)).not.toContain("memory/MEMORY.md");
       } finally {
         await manager.close();
       }

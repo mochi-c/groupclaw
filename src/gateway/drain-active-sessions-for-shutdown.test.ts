@@ -163,7 +163,9 @@ describe("drainActiveSessionsForShutdown", () => {
 
   it("awaits each session_end handler so the bounded timeout actually races real plugin work", async () => {
     const { promise: handlerLatch, resolve: resolveHandler } = createDeferred();
+    const handlerStarted = createDeferred();
     runSessionEndMock.mockImplementationOnce(async () => {
+      handlerStarted.resolve();
       await handlerLatch;
     });
     trackSessionForShutdown({ sessionId: "sess-A" });
@@ -174,40 +176,57 @@ describe("drainActiveSessionsForShutdown", () => {
       return value;
     });
 
-    // Yield twice so the drain can call `runSessionEnd`, then assert that
-    // it is still pending: this is the regression check for the fire-and-
-    // forget bug that the bot flagged on the original PR.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(drainSettled).toBe(false);
-    expect(runSessionEndMock).toHaveBeenCalledTimes(1);
-
-    resolveHandler?.();
+    try {
+      await handlerStarted.promise;
+      expect(drainSettled).toBe(false);
+      expect(runSessionEndMock).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveHandler();
+      await drainPromise;
+    }
     const result = await drainPromise;
     expect(result.timedOut).toBe(false);
     expect(result.emittedSessionIds).toEqual(["sess-A"]);
   });
 
   it("returns timedOut=true while still starting later emissions when one handler hangs", async () => {
+    vi.useFakeTimers();
+    const firstStarted = createDeferred();
+    const laterStarted = createDeferred();
+    const releaseHandler = createDeferred();
+    const handlerFinished = createDeferred();
     runSessionEndMock.mockImplementation(async (event: SessionEndHookEvent) => {
       if (event.sessionId === "sess-A") {
-        await new Promise<void>(() => {});
+        firstStarted.resolve();
+        await releaseHandler.promise;
+        handlerFinished.resolve();
+      } else {
+        laterStarted.resolve();
       }
     });
     trackSessionForShutdown({ sessionId: "sess-A" });
     trackSessionForShutdown({ sessionId: "sess-B", sessionKey: "agent:main:other" });
 
-    const result = await drainActiveSessionsForShutdown({
+    const drain = drainActiveSessionsForShutdown({
       reason: "shutdown",
       totalTimeoutMs: 120,
     });
-
-    expect(result.timedOut).toBe(true);
-    expect(result.emittedSessionIds.toSorted()).toEqual(["sess-A", "sess-B"]);
-    expect(runSessionEndMock).toHaveBeenCalledTimes(2);
-    expect(
-      runSessionEndMock.mock.calls.map(([event]) => (event as { sessionId?: string }).sessionId),
-    ).toEqual(["sess-A", "sess-B"]);
+    try {
+      await Promise.all([firstStarted.promise, laterStarted.promise]);
+      await vi.advanceTimersByTimeAsync(120);
+      const result = await drain;
+      expect(result.timedOut).toBe(true);
+      expect(result.emittedSessionIds.toSorted()).toEqual(["sess-A", "sess-B"]);
+      expect(runSessionEndMock).toHaveBeenCalledTimes(2);
+      expect(runSessionEndMock.mock.calls.map(([event]) => event.sessionId)).toEqual(
+        expect.arrayContaining(["sess-A", "sess-B"]),
+      );
+    } finally {
+      releaseHandler.resolve();
+      await handlerFinished.promise;
+      await drain;
+      vi.useRealTimers();
+    }
   });
 
   it("revokes shutdown transcript reads when the aggregate drain expires", async () => {

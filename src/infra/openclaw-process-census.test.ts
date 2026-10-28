@@ -593,6 +593,33 @@ it.each(["linux", "darwin"] as const)(
   },
 );
 
+it("includes self, updater ancestors, physical aliases and opaque foreign owners in generation custody", () => {
+  const artifact = "/releases/old";
+  rows.set(launcher, {
+    ppid: 1,
+    argv: ["node", "/app/openclaw.mjs", "update", "cleanup-generations"],
+    cwd: artifact,
+  });
+  rows.get(self)!.argv = ["node", "/current/dist/index.js", "update"];
+  rows.set(peer, { ppid: 1, argv: ["node", "dist/index.js"], cwd: "/alias" });
+  rows.set(peer + 1, { ppid: 1, argv: [], uid: 2000, commandError: denied(), cwd: denied() });
+  realpath.mockImplementation((file: string) =>
+    file.startsWith("/current/") || file.startsWith("/alias")
+      ? file.replace(/^\/(?:current|alias)/u, artifact)
+      : file,
+  );
+  expect(
+    inspectOtherOpenClawProcesses({
+      runId: "",
+      artifactPaths: [artifact],
+      custody: "all-processes",
+    }),
+  ).toEqual({
+    matchingPids: [launcher, self, peer],
+    unverifiedPids: [peer + 1],
+  });
+});
+
 it("names an unreadable same-user PID without exposing its process data", () => {
   rows.set(peer, {
     ppid: 1,

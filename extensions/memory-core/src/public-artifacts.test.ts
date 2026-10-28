@@ -41,7 +41,11 @@ describe("memory-core public artifacts", () => {
     const workspaceDir = path.join(fixtureRoot, "workspace-stable-kinds");
     vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
     await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "MEMORY.md"),
+      "# Durable Memory\n",
+      "utf8",
+    );
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-06.md"),
       "# Daily Note\n",
@@ -75,14 +79,6 @@ describe("memory-core public artifacts", () => {
     }
     expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual([
       {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: path.join(workspaceDir, "MEMORY.md"),
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-      {
         kind: "daily-note",
         workspaceDir,
         relativePath: "memory/2026-04-06.md",
@@ -95,6 +91,14 @@ describe("memory-core public artifacts", () => {
         workspaceDir,
         relativePath: "memory/dreaming/2026-04-06.md",
         absolutePath: path.join(workspaceDir, "memory", "dreaming", "2026-04-06.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "memory/MEMORY.md",
+        absolutePath: path.join(workspaceDir, "memory", "MEMORY.md"),
         agentIds: ["main"],
         contentType: "markdown",
       },

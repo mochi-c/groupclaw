@@ -37,7 +37,7 @@ async function mergeVectorResultsWithTemporalDecay(
 
 describe("temporal decay", () => {
   it("uses indexed remote mtimes in hybrid ranking while retaining evergreen and dated paths", async () => {
-    const paths = ["imports/note.md", "MEMORY.md", "memory/2026-02-09.md"];
+    const paths = ["imports/note.md", "memory/MEMORY.md", "memory/2026-02-09.md"];
     const results = await mergeHybridResults({
       vector: paths.map((filePath) => ({
         ...createVectorMemoryEntry(filePath, 1),
@@ -51,7 +51,7 @@ describe("temporal decay", () => {
       memorySourceMtimes: new Map(paths.map((filePath) => [filePath, NOW_MS - 30 * DAY_MS])),
     });
     expect(results.find((entry) => entry.path === "imports/note.md")?.score).toBeCloseTo(0.5);
-    expect(results.find((entry) => entry.path === "MEMORY.md")?.score).toBe(1);
+    expect(results.find((entry) => entry.path === "memory/MEMORY.md")?.score).toBe(1);
     expect(results.find((entry) => entry.path === "memory/2026-02-09.md")?.score).toBeGreaterThan(
       0.9,
     );
@@ -61,7 +61,7 @@ describe("temporal decay", () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
 
     const veryOld = new Date(Date.UTC(2010, 0, 1));
-    for (const relativePath of ["MEMORY.md", "USER.md", "memory/projects.md"]) {
+    for (const relativePath of ["memory/MEMORY.md", "USER.md", "memory/projects.md"]) {
       const filePath = path.join(dir, relativePath);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, "evergreen");
@@ -70,7 +70,7 @@ describe("temporal decay", () => {
 
     const decayed = await applyTemporalDecayToHybridResults({
       results: [
-        { path: "MEMORY.md", score: 1, source: "memory" },
+        { path: "memory/MEMORY.md", score: 1, source: "memory" },
         { path: "USER.md", score: 0.9, source: "memory" },
         { path: "memory/projects.md", score: 0.75, source: "memory" },
       ],

@@ -673,7 +673,7 @@ describe("memory index", () => {
     };
 
     const sessionId = "automatic-maintenance-purge";
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    const memoryPath = path.join(fixture.paths.memory, "MEMORY.md");
     await fs.writeFile(
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",

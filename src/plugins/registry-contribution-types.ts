@@ -11,6 +11,7 @@ import type {
   MemorySearchManager,
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
+import type { MemoryEventSource } from "../memory/memory-events.js";
 import type {
   EmbeddingBatchChunk,
   EmbeddingBatchOptions,
@@ -267,6 +268,14 @@ export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
+  /** Reserve a host-produced Event receipt before its exact bytes become visible. */
+  recordEventSource?(params: {
+    workspaceDir: string;
+    source: MemoryEventSource;
+    assertCurrent(): void;
+  }): Promise<void>;
+  /** Receive host-minted session audiences for scoped plugin tools and tools-arm flushes. */
+  supportsMemoryAudience?: true;
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;

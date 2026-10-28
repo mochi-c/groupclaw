@@ -1,4 +1,10 @@
 import fs from "node:fs/promises";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+  readMemoryAudienceExecutionSignal,
+} from "../plugins/memory-audience.js";
+import { usesLoadedMemoryAudience } from "../plugins/memory-state.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -15,6 +21,7 @@ export type WorkspaceSandboxParams = Pick<
   | "abortSignal"
   | "agentId"
   | "config"
+  | "chatType"
   | "cwd"
   | "execOverrides"
   | "permissionMode"
@@ -27,6 +34,7 @@ export type WorkspaceSandboxParams = Pick<
   | "requireWritableSandbox"
   | "requireWorkspaceOnly"
   | "workspaceDir"
+  | "memoryAudience"
 > & {
   admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
   /** Placement execution policy never supplies Gateway-side filesystem or media roots. */
@@ -65,6 +73,17 @@ export function resolveHarnessWorkspace(
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
+  const audience = params.memoryAudience;
+  const requireIsolatedWorkspace = audience?.kind === "conversation";
+  if (
+    !audience &&
+    (params.chatType === "group" || params.chatType === "channel") &&
+    usesLoadedMemoryAudience(params.config ?? {})
+  ) {
+    throw new Error(
+      "Conversation execution requires an admitted memory audience; reset the session after repairing its membership.",
+    );
+  }
   const assertRunCurrent = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
@@ -74,6 +93,10 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     assertRunCurrent?.();
+    if (audience) {
+      assertMemoryAudienceSession(audience, params.sessionKey);
+      assertMemoryAudienceCurrent(audience);
+    }
   };
   assertCurrent();
   const { sessionAgentId } = resolveSessionAgentIds({
@@ -83,7 +106,14 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
-  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
+  const sandboxSessionKey = requireIsolatedWorkspace
+    ? `${sessionKey}:project:${params.sessionId}`
+    : params.sandboxSessionKey?.trim() || sessionKey;
+  if (requireIsolatedWorkspace && params.placementSandbox) {
+    throw new Error(
+      "Conversation execution requires an isolated project sandbox; host placements cannot supply its workspace.",
+    );
+  }
   const prepareWorkspace = async (
     sandboxRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>,
   ) => {
@@ -103,6 +133,9 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         })
       : null;
     assertCurrent();
+    if (sandbox?.isolatedWorkspace && audience) {
+      sandbox.executionSignal = readMemoryAudienceExecutionSignal(audience);
+    }
     const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
     const effectiveWorkspace =
       sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
@@ -112,6 +145,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     if (
       params.requireWritableSandbox &&
       executionSandbox?.enabled &&
+      !executionSandbox.isolatedWorkspace &&
       executionSandbox.workspaceAccess !== "rw"
     ) {
       throw new Error("sandbox workspace is not read-write; collection review skipped");
@@ -119,9 +153,10 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
     // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
     // the agent's canonical workspace as their permission boundary.
-    const sessionPermissionRoot = projectedWorkspace
-      ? sandbox.workspaceDir
-      : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
+    const sessionPermissionRoot =
+      sandbox?.isolatedWorkspace || projectedWorkspace
+        ? sandbox.workspaceDir
+        : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
     const sessionPermissionPolicy = params.permissionMode
       ? {
           root: sessionPermissionRoot,
@@ -140,6 +175,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
       effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
       effectiveFsWorkspaceOnly:
         params.requireWorkspaceOnly === true ||
+        requireIsolatedWorkspace ||
         resolveEffectiveToolFsWorkspaceOnly({
           cfg: params.config,
           agentId: sessionAgentId,
@@ -166,6 +202,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
             params.sandboxAgentId ??
             (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
           sessionKey: sandboxSessionKey,
+          requireIsolatedWorkspace,
         },
         { env: process.env, cwd: process.cwd(), assertCurrent },
         prepareWorkspace,

@@ -15,6 +15,11 @@ export type {
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 
+export { withMemoryDreamSource } from "../plugins/memory-audience.js";
+export type { MemorySourceSession } from "../memory/session-memory-context.js";
+export type { MemoryEventSource } from "../memory/memory-events.js";
+export { resolveMemoryArtifactRelativePath } from "../memory/scoped-memory.js";
+
 /** @deprecated Use loadArchivedSessionsAsync; removed at the next Plugin SDK major. */
 export { listSessionTranscriptArchivesReadOnly as loadArchivedSessions } from "../config/sessions/session-accessor.js";
 export {

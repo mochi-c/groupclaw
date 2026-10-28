@@ -28,6 +28,12 @@ import type {
   InternalSessionEntry,
   SessionEntry,
 } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createInternalHookEvent,
+  hasInternalHookListeners,
+  triggerInternalHook,
+} from "../hooks/internal-hooks.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   clearGenerationPrivateFieldsForRotatedSessionPatch,
@@ -101,6 +107,8 @@ type DeleteSessionEntryParams = SessionStoreReadParams & {
   archiveTranscript?: boolean;
   expectedSessionId?: string | null;
   expectedUpdatedAt?: number;
+  /** Emit closure evidence from the committed deleted entry, never the caller's snapshot. */
+  lifecycle?: { cfg: OpenClawConfig; reason: "thread-closed" };
 };
 
 type SessionLifecycleArtifactsCleanupParams = {
@@ -326,6 +334,30 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
       storeKeys: [params.sessionKey],
     },
   });
+  if (
+    result.deleted &&
+    result.deletedEntry &&
+    params.lifecycle &&
+    hasInternalHookListeners("session", "closed")
+  ) {
+    await triggerInternalHook(
+      createInternalHookEvent("session", "closed", params.sessionKey, {
+        cfg: params.lifecycle.cfg,
+        agentId,
+        storePath,
+        sessionEntry: projectPluginSessionEntry(result.deletedEntry),
+        reason: params.lifecycle.reason,
+        sourceArchives: result.archivedTranscripts.map(({ sessionId, generation }) => ({
+          sessionId,
+          generation,
+        })),
+        previousSessionMemory: {
+          status: "unavailable",
+          reason: "Conversation evidence is retained in the recorded source transcript archives",
+        },
+      }),
+    );
+  }
   return result.deleted;
 }
 

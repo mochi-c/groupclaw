@@ -681,7 +681,7 @@ describe("memory session update sync", () => {
     await baseline.sync({ reason: "index-before-new-memory", force: true });
     await baseline.close();
     const sessionId = "forgotten-memory-source";
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    const memoryPath = path.join(fixture.paths.memory, "MEMORY.md");
     await fs.writeFile(
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:private-entry -->\n- Private violet alpha fragment.\n",
@@ -749,7 +749,9 @@ describe("memory session update sync", () => {
       expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
       const database = Reflect.get(manager, "db") as DatabaseSync;
       expect(
-        database.prepare("SELECT text FROM memory_index_chunks WHERE path = 'MEMORY.md'").all(),
+        database
+          .prepare("SELECT text FROM memory_index_chunks WHERE path = 'memory/MEMORY.md'")
+          .all(),
       ).toEqual([]);
       expect(manager.status().dirty).toBe(true);
       await manager.sync({ reason: "retry-after-memory-forget", force: true });
@@ -777,7 +779,7 @@ describe("memory session update sync", () => {
       sources: ["memory"],
     });
     const sessionId = "interrupted-memory-source";
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    const memoryPath = path.join(fixture.paths.memory, "MEMORY.md");
     const userPath = path.join(fixture.paths.workspace, "USER.md");
     await fs.writeFile(
       memoryPath,
@@ -875,7 +877,7 @@ describe("memory session update sync", () => {
         peer: { workspace: fixture.paths.workspace },
       },
     };
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    const memoryPath = path.join(fixture.paths.memory, "MEMORY.md");
     await fs.writeFile(
       memoryPath,
       "# Memory\n<!-- openclaw-memory-promotion:shared-private -->\n- Private violet shared fragment.\n",
@@ -904,7 +906,7 @@ describe("memory session update sync", () => {
     await peer.sync({ reason: "index-shared-memory", force: true });
     const database = Reflect.get(peer, "db") as DatabaseSync;
     const snapshot = database
-      .prepare("SELECT hash, text FROM memory_index_chunks WHERE path = 'MEMORY.md'")
+      .prepare("SELECT hash, text FROM memory_index_chunks WHERE path = 'memory/MEMORY.md'")
       .all();
     expect(snapshot.some((row) => String(row.text).includes("Private violet"))).toBe(true);
     expect(
@@ -923,7 +925,9 @@ describe("memory session update sync", () => {
     // The first purge owns only main's database. Peer must use its retained
     // snapshot when its own explicit purge finds the shared file already clean.
     expect(
-      database.prepare("SELECT hash, text FROM memory_index_chunks WHERE path = 'MEMORY.md'").all(),
+      database
+        .prepare("SELECT hash, text FROM memory_index_chunks WHERE path = 'memory/MEMORY.md'")
+        .all(),
     ).toEqual(snapshot);
 
     const forgotten = await forgetMemoryEntries({
@@ -934,7 +938,9 @@ describe("memory session update sync", () => {
     expect(forgotten.artifacts.memoryFiles).toBe(0);
     expect(forgotten.artifacts.indexChunks).toBe(snapshot.length);
     expect(
-      database.prepare("SELECT text FROM memory_index_chunks WHERE path = 'MEMORY.md'").all(),
+      database
+        .prepare("SELECT text FROM memory_index_chunks WHERE path = 'memory/MEMORY.md'")
+        .all(),
     ).toEqual([]);
     expect(
       database

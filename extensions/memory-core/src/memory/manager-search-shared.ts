@@ -1,5 +1,38 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemorySearchManager,
+  MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+
+export type MemoryPathFilter = NonNullable<
+  NonNullable<Parameters<MemorySearchManager["search"]>[1]>["memoryPathFilter"]
+>;
+
+/** One bound predicate shared by body, path, vector, and KNN/count readers. */
+export function buildMemoryPathFilter(
+  filter: MemoryPathFilter | undefined,
+  alias?: string,
+): { sql: string; params: string[] } {
+  if (!filter) {
+    return { sql: "", params: [] };
+  }
+  const column = alias ? `${alias}.path` : "path";
+  const source = alias ? `${alias}.source` : "source";
+  const clauses = [`${source} <> 'memory'`];
+  const params: string[] = [];
+  if (filter.includeOutsideMemory) {
+    clauses.push(`instr(${column}, 'memory/') <> 1`);
+  }
+  if (filter.exactPaths.length > 0) {
+    clauses.push(`${column} COLLATE BINARY IN (${filter.exactPaths.map(() => "?").join(", ")})`);
+    params.push(...filter.exactPaths);
+  }
+  for (const prefix of filter.directoryPrefixes) {
+    clauses.push(`instr(${column}, ?) = 1`);
+    params.push(prefix);
+  }
+  return { sql: ` AND (${clauses.join(" OR ")})`, params };
+}
 
 export type MemorySearchRow = {
   id: string;

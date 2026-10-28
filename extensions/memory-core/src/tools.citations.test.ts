@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   clearMemoryPluginState,
@@ -21,6 +22,7 @@ import {
 } from "./test-helpers.js";
 import {
   createMemoryGetTool,
+  createMemoryReadTool,
   createMemorySearchTool,
   testing as memoryToolsTesting,
 } from "./tools.js";
@@ -80,7 +82,8 @@ describe("memory tools", () => {
     const getConfig = () => liveConfig;
     const searchTool = createMemorySearchTool({ config: startupConfig, getConfig });
     const getTool = createMemoryGetTool({ config: startupConfig, getConfig });
-    if (!searchTool || !getTool) {
+    const readTool = createMemoryReadTool({ config: startupConfig, getConfig });
+    if (!searchTool || !getTool || !readTool) {
       throw new Error("memory tools missing");
     }
 
@@ -97,8 +100,81 @@ describe("memory tools", () => {
     await expect(getTool.execute("revoked-get", { path: "MEMORY.md" })).rejects.toThrow(
       disabledMessage,
     );
+    await expect(readTool.execute("revoked-read", { ref: "old-ref" })).rejects.toThrow(
+      disabledMessage,
+    );
     expect(getMemorySearchManagerMockCalls()).toBe(0);
     expect(getReadAgentMemoryFileMockCalls()).toBe(0);
+  });
+
+  it.each([
+    { name: "missing envelope", ref: "not-a-reference" },
+    { name: "unsupported version", ref: "memory:v2:WyJtYWluIiwiTUVNT1JZLm1kIiwxLDJd" },
+    { name: "malformed encoding", ref: "memory:v1:WyJtYWluIiwiTUVNT1JZLm1kIiwxLDJd!" },
+    {
+      name: "invalid range",
+      ref:
+        "memory:v1:" +
+        Buffer.from(JSON.stringify(["main", "MEMORY.md", 0, 2])).toString("base64url"),
+    },
+    { name: "oversized envelope", ref: "memory:v1:" + "A".repeat(8_193) },
+  ])("rejects an invalid reference before reading: $name", async ({ ref }) => {
+    const read = createMemoryReadTool({ config: asOpenClawConfig({}) })!;
+    const result = await read.execute("invalid-reference", { ref });
+    expect(result.details).toMatchObject({
+      status: "error",
+      code: "MEMORY_REFERENCE_INVALID",
+      text: "",
+    });
+    expect(getReadAgentMemoryFileMockCalls()).toBe(0);
+  });
+
+  it("offers file references only for readable Markdown hits", async () => {
+    setMemorySearchImpl(async () => [memoryHit("memory/notes.md"), memoryHit("memory/image.png")]);
+    const result = await createMemorySearchToolOrThrow().execute("file-references", {
+      query: "notes",
+    });
+    const hits = (result.details as { results: Array<{ path: string; ref?: string }> }).results;
+    expect(hits.map((hit) => hit.path)).toEqual(["memory/notes.md", "memory/image.png"]);
+    expect(hits.find((hit) => hit.path === "memory/notes.md")).toHaveProperty(
+      "ref",
+      expect.any(String),
+    );
+    for (const hit of hits.filter((entry) => entry.path !== "memory/notes.md")) {
+      expect(hit).not.toHaveProperty("ref");
+    }
+  });
+
+  it("withholds a reference excerpt when the audience is revoked while its read is pending", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    let current = true;
+    setMemoryReadFileImpl(async ({ relPath }) => {
+      entered.resolve();
+      await release.promise;
+      return { status: "ok", path: relPath, text: "Restricted marker." };
+    });
+    const read = createMemoryReadTool({
+      config: asOpenClawConfig({}),
+      assertMemoryAudienceCurrent: () => {
+        if (!current) {
+          throw new Error("Audience revoked");
+        }
+      },
+    })!;
+    const ref =
+      "memory:v1:" + Buffer.from(JSON.stringify(["main", "MEMORY.md", 1, 2])).toString("base64url");
+    const pending = read.execute("revoked-during-read", { ref });
+    try {
+      await entered.promise;
+      current = false;
+      release.resolve();
+      await expect(pending).rejects.toThrow("Audience revoked");
+    } finally {
+      release.resolve();
+    }
+    await expect(read.execute("revoked-before-read", { ref })).rejects.toThrow("Audience revoked");
+    expect(getReadAgentMemoryFileMockCalls()).toBe(1);
   });
 
   it("persists only surfaced raw recall evidence before citation formatting", async () => {

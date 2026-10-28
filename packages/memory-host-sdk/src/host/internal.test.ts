@@ -196,11 +196,12 @@ describe("memory host SDK package internals", () => {
 
   it("lists canonical markdown and enabled multimodal files", async () => {
     const tmpDir = getTmpDir();
-    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     fsSync.writeFileSync(path.join(tmpDir, "USER.md"), "# User profile");
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Legacy uppercase memory");
     fsSync.writeFileSync(path.join(tmpDir, "memory.md"), "# Legacy memory");
     const defaultMemoryDir = path.join(tmpDir, "memory");
     fsSync.mkdirSync(defaultMemoryDir, { recursive: true });
+    fsSync.writeFileSync(path.join(defaultMemoryDir, "MEMORY.md"), "# Workspace memory");
     fsSync.writeFileSync(path.join(defaultMemoryDir, "default-diagram.png"), Buffer.from("png"));
     const extraDir = path.join(tmpDir, "extra");
     fsSync.mkdirSync(extraDir, { recursive: true });
@@ -216,11 +217,11 @@ describe("memory host SDK package internals", () => {
     );
 
     expect(files.map((file) => path.relative(tmpDir, file)).toSorted()).toEqual([
-      "MEMORY.md",
       "USER.md",
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
       path.join("extra", "recording.m2a"),
+      path.join("memory", "MEMORY.md"),
     ]);
   });
 
@@ -265,13 +266,14 @@ describe("memory host SDK package internals", () => {
 
   it("propagates operational failures while discovering the canonical memory file", async () => {
     const workspaceDir = getTmpDir();
-    const scanError = Object.assign(new Error(`I/O failure: ${workspaceDir}`), { code: "EIO" });
-    const realReaddir = fs.readdir;
-    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
-      if (path.resolve(String(args[0])) === workspaceDir) {
+    const canonicalPath = path.join(workspaceDir, "memory", "MEMORY.md");
+    const scanError = Object.assign(new Error(`I/O failure: ${canonicalPath}`), { code: "EIO" });
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
+      if (path.resolve(String(args[0])) === canonicalPath) {
         throw scanError;
       }
-      return await realReaddir(...args);
+      return await realLstat(...args);
     });
 
     await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({

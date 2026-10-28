@@ -294,6 +294,36 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     );
 
   update
+    .command("cleanup-generations")
+    .description("Collect obsolete owned immutable releases while retaining runtime references")
+    .requiredOption("--root <path>", "Stable adopted installation root")
+    .option("--dry-run", "Preview eligible release directories without writes", false)
+    .option("--json", "Output result as JSON", false)
+    .action(
+      createUpdateLeafAction(
+        async (opts, command) => {
+          for (const key of ["channel", "tag", "timeout", "restart", "acceptCapabilities", "yes"]) {
+            const source = update.getOptionValueSource(key);
+            if (source && source !== "default") {
+              throw new Error(
+                `The parent option ${key} is not supported for openclaw update cleanup-generations.`,
+              );
+            }
+          }
+          const { updateCleanupImmutableCommand } =
+            await import("./update-cli/update-command-immutable.js");
+          await updateCleanupImmutableCommand({
+            root: requiredUpdateLeafString(opts, "root"),
+            dryRun:
+              Boolean(opts.dryRun) || Boolean(inheritOptionFromParent<boolean>(command, "dryRun")),
+            json: Boolean(opts.json) || inheritedUpdateJson(command),
+          });
+        },
+        { supportsDryRun: true },
+      ),
+    );
+
+  update
     .command("recover")
     .description("Resume a retained immutable activation without restarting a healthy Gateway")
     .requiredOption("--root <path>", "Stable adopted installation root")

@@ -42,7 +42,7 @@ export function setWorkspaceFileSourceIdentity(
   workspaceFileSourceIdentities.set(file, sourceIdentity);
 }
 
-/** Remote source recorded by the successful read, unavailable on hook-created copies. */
+/** Canonical source recorded by the successful read, unavailable on hook-created copies. */
 export function getWorkspaceFileSourceRelativePath(file: object): string | undefined {
   return workspaceFileSourceIdentities.get(file)?.[3];
 }
@@ -143,7 +143,12 @@ export async function readWorkspaceFileWithGuards(params: {
         }
 
         const identity = workspaceFileIdentity(opened.stat, opened.path);
-        const sourceIdentity = [opened.path, opened.stat, identity] as const;
+        const sourceIdentity = [
+          opened.path,
+          opened.stat,
+          identity,
+          path.relative(opened.rootRealPath, opened.path).replaceAll(path.sep, "/"),
+        ] as const;
         const cached =
           params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
         if (cached !== undefined) {

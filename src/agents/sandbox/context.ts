@@ -28,7 +28,7 @@ import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contra
 import { ensureSandboxWorkspace } from "../workspace.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
-import { resolveSandboxConfigForAgent } from "./config.js";
+import { resolveIsolatedSandboxConfig, resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
@@ -39,6 +39,7 @@ import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
+import { ISOLATED_WORKSPACE_TOOL_ALLOW, resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
@@ -130,7 +131,9 @@ async function ensureSandboxWorkspaceLayout(
     });
 
   assertCurrent?.();
-  if (cfg.workspaceAccess !== "rw") {
+  if (runtime.isolatedWorkspace) {
+    await fs.mkdir(sandboxWorkspaceDir, { recursive: true });
+  } else if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
       agentWorkspaceDir,
@@ -142,16 +145,20 @@ async function ensureSandboxWorkspaceLayout(
     await fs.mkdir(workspaceDir, { recursive: true });
   }
   assertCurrent?.();
-  const syncedSkills = await syncSandboxSkillsToWorkspace({
-    sourceWorkspaceDir: agentWorkspaceDir,
-    targetWorkspaceDir: cfg.workspaceAccess === "rw" ? skillsWorkspaceDir : sandboxWorkspaceDir,
-    config: params.config,
-    agentId: runtime.agentId,
-    rawSessionKey,
-    execOverrides: params.execOverrides,
-    skillsSnapshot: params.skillsSnapshot,
-    assertCurrent,
-  });
+  const syncedSkills: Awaited<ReturnType<typeof syncSandboxSkillsToWorkspace>> =
+    runtime.isolatedWorkspace
+      ? {}
+      : await syncSandboxSkillsToWorkspace({
+          sourceWorkspaceDir: agentWorkspaceDir,
+          targetWorkspaceDir:
+            cfg.workspaceAccess === "rw" ? skillsWorkspaceDir : sandboxWorkspaceDir,
+          config: params.config,
+          agentId: runtime.agentId,
+          rawSessionKey,
+          execOverrides: params.execOverrides,
+          skillsSnapshot: params.skillsSnapshot,
+          assertCurrent,
+        });
 
   return {
     agentWorkspaceDir,
@@ -186,7 +193,16 @@ function resolveSandboxSession(params: {
     return null;
   }
 
-  const configured = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  const configured = runtime.isolatedWorkspace
+    ? {
+        ...resolveIsolatedSandboxConfig(
+          resolveSandboxConfigForAgent(params.config, runtime.agentId),
+        ),
+        tools: resolveSandboxToolPolicyForAgent(params.config, runtime.agentId, {
+          containedToolNames: ISOLATED_WORKSPACE_TOOL_ALLOW,
+        }),
+      }
+    : resolveSandboxConfigForAgent(params.config, runtime.agentId);
   const sessionAttachmentRoot = resolveSubagentSessionAttachmentRootDir({
     agentId: runtime.agentId,
     childSessionKey: rawSessionKey,
@@ -195,13 +211,15 @@ function resolveSandboxSession(params: {
   // even when ordinary agent-scoped turns share one, so no sibling guest can
   // inherit this session's protected projection.
   try {
-    if (fsSync.statSync(sessionAttachmentRoot).isDirectory()) {
+    if (!runtime.isolatedWorkspace && fsSync.statSync(sessionAttachmentRoot).isDirectory()) {
       runtime.isolationSubject = { kind: "session", sessionKey: rawSessionKey };
     }
   } catch {
     // No attachment grant for this session.
   }
-  const librarySelections = params.skillsSnapshot?.librarySelections;
+  const librarySelections = runtime.isolatedWorkspace
+    ? undefined
+    : params.skillsSnapshot?.librarySelections;
   // Shared/agent sandboxes cannot expose one person's private bundles to another session,
   // or replace bytes under an active revision. Selection changes get a separate runtime.
   if (librarySelections?.length) {
@@ -263,19 +281,20 @@ async function prepareSandboxWorkspaceSelection(
   resolved: ResolvedSandboxSession,
 ) {
   const { rawSessionKey, runtime } = resolved;
-  const localWorkspace = params.config
-    ? await (
-        await import("./local-workspace.js")
-      ).prepareLocalSandboxWorkspace({
-        cfg: params.config,
-        agentId: runtime.agentId,
-        sessionKey: rawSessionKey,
-        workspaceDir: params.workspaceDir,
-        sandbox: resolved.cfg,
-        signal: readAdmittedRunOperatorAuthority(params.admittedRunContext)?.signal,
-        assertCurrent: params.assertCurrent,
-      })
-    : undefined;
+  const localWorkspace =
+    params.config && !runtime.isolatedWorkspace
+      ? await (
+          await import("./local-workspace.js")
+        ).prepareLocalSandboxWorkspace({
+          cfg: params.config,
+          agentId: runtime.agentId,
+          sessionKey: rawSessionKey,
+          workspaceDir: params.workspaceDir,
+          sandbox: resolved.cfg,
+          signal: readAdmittedRunOperatorAuthority(params.admittedRunContext)?.signal,
+          assertCurrent: params.assertCurrent,
+        })
+      : undefined;
   const cfg = localWorkspace
     ? {
         ...resolved.cfg,
@@ -289,6 +308,7 @@ async function prepareSandboxWorkspaceSelection(
 
   if (
     !localWorkspace &&
+    !runtime.isolatedWorkspace &&
     runtime.sandboxRequired &&
     resolveSandboxConfigForAgent(params.config, runtime.agentId).workspaceAccess === "rw"
   ) {
@@ -309,7 +329,9 @@ async function resolveProvisionedSandboxContext(
   const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
   const config = params.config;
   const allowGitHub =
-    config && resolveAgentConfig(config, runtime.agentId)?.tools?.github?.allowInSandbox === true;
+    !runtime.isolatedWorkspace &&
+    config &&
+    resolveAgentConfig(config, runtime.agentId)?.tools?.github?.allowInSandbox === true;
   if (allowGitHub && cfg.scope === "shared") {
     const message = `GitHub identity for agent "${runtime.agentId}" cannot enter a shared sandbox; use agent or session scope.`;
     sandboxLog.warn(message);
@@ -370,7 +392,7 @@ async function resolveProvisionedSandboxContext(
       }
     : resolvedCfg;
   let readOnlyResourceMounts =
-    resolvedCfg.scope === "shared"
+    runtime.isolatedWorkspace || resolvedCfg.scope === "shared"
       ? undefined
       : await (async () => {
           const hostPath = resolveSubagentSessionAttachmentRootDir({
@@ -480,6 +502,7 @@ async function resolveProvisionedSandboxContext(
   const sandboxContext: SandboxContext & { backend: typeof backend } = {
     enabled: true,
     ...(runtime.sandboxRequired ? { required: true } : {}),
+    ...(runtime.isolatedWorkspace ? { isolatedWorkspace: true as const } : {}),
     ...(localWorkspace
       ? { workspaceSource: "managed-worktree" as const, workspaceCwd: localWorkspace.workspaceCwd }
       : {}),

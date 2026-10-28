@@ -24,6 +24,8 @@ export type SandboxBackendCommandParams = {
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
+  /** Revalidated after awaited preparation at final command admission. */
+  assertCurrent?: () => void;
 };
 
 export type SandboxBackendCommandResult = {
@@ -45,6 +47,7 @@ export type SandboxFsBridgeContext = {
     tmpfs?: string[];
   };
   backend?: {
+    supportsCommandAuthority?: true;
     runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
   };
 };
@@ -54,6 +57,7 @@ export type SandboxBackendHandle = {
   runtimeId: string;
   runtimeLabel: string;
   workdir: string;
+  supportsCommandAuthority?: true;
   env?: Record<string, string>;
   configLabel?: string;
   configLabelKind?: string;

@@ -57,8 +57,12 @@ describe("memory-host-core helpers", () => {
     const workspaceDir = path.join(fixtureRoot, "workspace");
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
-      await fs.mkdir(workspaceDir);
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Read-only memory\n", "utf8");
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "MEMORY.md"),
+        "# Read-only memory\n",
+        "utf8",
+      );
       await appendMemoryHostEvent(workspaceDir, recallEvent("read-only"));
       await fs.chmod(workspaceDir, 0o500);
 
@@ -70,8 +74,9 @@ describe("memory-host-core helpers", () => {
         {
           kind: "memory-root",
           workspaceDir,
-          relativePath: "MEMORY.md",
+          relativePath: "memory/MEMORY.md",
         },
+        expect.objectContaining({ kind: "event-log" }),
       ]);
     } finally {
       await fs.chmod(workspaceDir, 0o700).catch(() => undefined);
@@ -375,7 +380,7 @@ describe("memory-host-core helpers", () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
       await fs.mkdir(workspaceDir);
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Still visible\n", "utf8");
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Legacy root file\n", "utf8");
       await fs.writeFile(path.join(workspaceDir, "memory"), "user file\n", "utf8");
       await appendMemoryHostEvent(workspaceDir, recallEvent("blocked export"));
 
@@ -383,9 +388,7 @@ describe("memory-host-core helpers", () => {
         listMemoryHostPublicArtifacts({
           cfg: workspaceConfig(workspaceDir),
         }),
-      ).resolves.toEqual([
-        expect.objectContaining({ kind: "memory-root", relativePath: "MEMORY.md" }),
-      ]);
+      ).resolves.toEqual([]);
       await expect(fs.readFile(path.join(workspaceDir, "memory"), "utf8")).resolves.toBe(
         "user file\n",
       );
@@ -400,11 +403,15 @@ describe("memory-host-core helpers", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       const workspaceDir = path.join(fixtureRoot, "workspace");
       const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
-      await fs.mkdir(workspaceDir);
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "MEMORY.md"),
+        "# Durable Memory\n",
+        "utf8",
+      );
       expect(
         (await listMemoryHostPublicArtifacts({ cfg })).map((artifact) => artifact.relativePath),
-      ).toEqual(["MEMORY.md"]);
+      ).toEqual(["memory/MEMORY.md"]);
 
       const memoryDir = path.join(workspaceDir, "memory");
       for (const relativePath of [
@@ -455,11 +462,11 @@ describe("memory-host-core helpers", () => {
       }
       expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual(
         [
-          { kind: "memory-root", relativePath: "MEMORY.md" },
           { kind: "daily-note", relativePath: "memory/.hidden.md" },
           { kind: "daily-note", relativePath: "memory/.notes/retained.md" },
           { kind: "daily-note", relativePath: "memory/2026-05-18.md" },
           { kind: "dream-report", relativePath: "memory/dreaming/2026-05-18.md" },
+          { kind: "memory-root", relativePath: "memory/MEMORY.md" },
           { kind: "daily-note", relativePath: "memory/nested/inner.md" },
         ].map(({ kind, relativePath }) => ({
           kind,
@@ -521,7 +528,7 @@ describe("memory-host-core helpers", () => {
       unreadableDirectory = memoryDir;
       expect(
         (await listMemoryHostPublicArtifacts({ cfg })).map((artifact) => artifact.relativePath),
-      ).toEqual(["MEMORY.md"]);
+      ).toEqual([]);
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }

@@ -85,7 +85,7 @@ describe("memory host event journal integration", () => {
     await fs.mkdir(path.join(workspaceDir, "memory", "decisoes"), { recursive: true });
     await fs.mkdir(path.join(workspaceDir, "memory", "idiomas"), { recursive: true });
     await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+      path.join(workspaceDir, "memory", "MEMORY.md"),
       "# Memory\n\nAlpha durable note.\n",
       "utf8",
     );
@@ -105,7 +105,7 @@ describe("memory host event journal integration", () => {
       query: "alpha durable memory",
       results: [
         {
-          path: "MEMORY.md",
+          path: "memory/MEMORY.md",
           startLine: 3,
           endLine: 3,
           score: 0.91,
@@ -152,7 +152,7 @@ describe("memory host event journal integration", () => {
     expect(skippedEvent.eligibleResultCount).toBe(0);
     expect(skippedEvent.skippedResultCount).toBe(3);
     expect(skippedEvent.results.map((result) => result.path)).toEqual([
-      "MEMORY.md",
+      "memory/MEMORY.md",
       "memory/decisoes/2026-06.md",
       "memory/idiomas/PLANO.md",
     ]);

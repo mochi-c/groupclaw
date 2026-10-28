@@ -545,7 +545,17 @@ export async function prepareImmutableUpdate(params: {
               filter: (file) => file !== path.join(built, ".git"),
             });
             await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
-            await sealImmutableGeneration(candidate);
+            assertCurrent();
+            await sealImmutableGeneration(
+              candidate,
+              {
+                root: descriptor.root,
+                rootIdentity: descriptor.rootIdentity,
+                releasesIdentity: descriptor.releasesIdentity,
+                sha: selectedSha,
+              },
+              assertCurrent,
+            );
             const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
             await verifyImmutableService(
               descriptor.service,

@@ -217,7 +217,7 @@ describe("memory index", () => {
       );
       expect(manager.status().fts?.available).toBe(true);
       await fs.writeFile(
-        path.join(fixture.paths.workspace, "MEMORY.md"),
+        path.join(fixture.paths.memory, "MEMORY.md"),
         "- Unrelated exact-path body. <!-- project: active-project -->",
       );
       await fs.writeFile(
@@ -245,10 +245,12 @@ describe("memory index", () => {
           onPartialResults: (snapshot) => partials.push(snapshot),
         });
         expect(results).toHaveLength(1);
-        expect(results[0]?.path).toBe("MEMORY.md");
+        expect(results[0]?.path).toBe("memory/MEMORY.md");
         expect(results[0]?.score).toBeCloseTo(score);
         if (mode === "hybrid") {
-          expect(partials).toEqual([[expect.objectContaining({ path: "MEMORY.md", score })]]);
+          expect(partials).toEqual([
+            [expect.objectContaining({ path: "memory/MEMORY.md", score })],
+          ]);
         }
       }
     },
@@ -262,7 +264,7 @@ describe("memory index", () => {
         createCfg({ provider: mode === "keyword-only" ? "none" : undefined, minScore: 1 }),
       );
       await fs.writeFile(
-        path.join(fixture.paths.workspace, "MEMORY.md"),
+        path.join(fixture.paths.memory, "MEMORY.md"),
         [
           ...Array.from(
             { length: 4 },
@@ -611,7 +613,7 @@ describe("memory index", () => {
       return;
     }
 
-    const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
+    const memoryPath = path.join(fixture.paths.memory, "MEMORY.md");
     await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
     const staleAt = new Date("2020-01-01T00:00:00.000Z");
     await fs.utimes(memoryPath, staleAt, staleAt);

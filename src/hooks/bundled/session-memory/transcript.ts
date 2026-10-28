@@ -16,6 +16,7 @@ const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
 const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
 const SESSION_MEMORY_JSON_LINE_SEPARATOR_RE = /[\u0085\u2028\u2029]/gu;
+const SESSION_MEMORY_MAX_BYTES = 8 * 1024 * 1024;
 
 function quoteSessionMemoryText(text: string): string {
   // One JSON string per role record keeps message text from forging later
@@ -100,6 +101,9 @@ function renderSessionMemoryRecords(events: readonly unknown[]): SessionMemoryRe
       continue;
     }
     const text = extractTextMessageContent(record.message.content);
+    if (text && Buffer.byteLength(text) > SESSION_MEMORY_MAX_BYTES) {
+      continue;
+    }
     const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
     if (!sanitized) {
       continue;
@@ -150,13 +154,22 @@ export function getRecentSessionProjectionFromEvents(
   if (limit === 0) {
     return null;
   }
-  const records = renderSessionMemoryRecords(events).slice(-limit);
+  const records = renderSessionMemoryRecords(events.slice(-4_096)).slice(-limit);
   if (records.length === 0) {
     return null;
   }
+  const bounded: SessionMemoryRecord[] = [];
+  let bytes = 0;
+  for (const record of records.toReversed()) {
+    const size = Buffer.byteLength(record.line) + 1;
+    if (bytes + size <= SESSION_MEMORY_MAX_BYTES) {
+      bounded.unshift(record);
+      bytes += size;
+    }
+  }
   return {
-    content: records.map((record) => record.line).join("\n"),
-    originClass: records.some(
+    content: bounded.map((record) => record.line).join("\n"),
+    originClass: bounded.some(
       (record) => record.originClass === "untrusted" || record.originClass === "system",
     )
       ? "untrusted"

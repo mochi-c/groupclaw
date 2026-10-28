@@ -339,6 +339,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionKey: params.sessionKey,
       agentId,
       reason: "compaction",
+      sessionEntry: params.previousEntry,
       sessionFile:
         transcript.sessionFile ??
         (agentId && storePath

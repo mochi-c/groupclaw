@@ -552,7 +552,7 @@ export function buildAgentSystemPrompt(params: {
     ? [
         "## Directory Roles",
         `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools and deliverables).`,
-        `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
+        `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, and scoped memory under memory/; use absolute paths).`,
       ]
     : ["## Workspace", `Working directory: ${displayWorkspaceDir}`, workspaceGuidance];
   const careSection = [

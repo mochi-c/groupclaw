@@ -1,10 +1,17 @@
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MemoryContextReadContext } from "../memory/scoped-memory.js";
 
 /** Host-resolved memory partition for one trusted session invocation. */
 export type MemoryAudience =
-  | { kind: "owner-private"; agentId: string }
-  | { kind: "conversation"; agentId: string; sessionKey: string; sessionId: string };
+  | { kind: "owner-private"; agentId: string; context?: MemoryContextReadContext }
+  | {
+      kind: "conversation";
+      agentId: string;
+      sessionKey: string;
+      sessionId: string;
+      context?: MemoryContextReadContext;
+    };
 
 /** Authenticated caller authority supplied by the trusted host, never inferred from IDs. */
 export type MemoryCallerAuthority =

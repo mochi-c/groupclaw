@@ -44,6 +44,9 @@ export function createSandboxFsBridge(params: {
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
+  get supportsMutationAuthority(): true | undefined {
+    return this.sandbox.backend.supportsCommandAuthority;
+  }
   private readonly sandbox: MountedSandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
@@ -213,6 +216,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       allowFailure: kind === "create" ? true : undefined,
       stdin: buffer,
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
     return { result, containerPath: target.containerPath };
   }
@@ -242,6 +246,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         ),
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -270,6 +275,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         force: params.force,
       }),
       signal: params.signal,
+      assertBeforeMutation: params.assertBeforeMutation,
     });
   }
 
@@ -415,7 +421,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private async runCheckedCommand(
-    plan: SandboxFsCommandPlan & { stdin?: Buffer | string; signal?: AbortSignal },
+    plan: SandboxFsCommandPlan & {
+      stdin?: Buffer | string;
+      signal?: AbortSignal;
+      assertBeforeMutation?: () => void;
+    },
   ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {
@@ -423,12 +433,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       // checks immediately before command execution to close TOCTOU gaps.
       await this.pathGuard.assertPathChecks(plan.checks);
     }
+    plan.assertBeforeMutation?.();
     return await this.sandbox.backend.runShellCommand({
       script: plan.script,
       args: plan.args,
       stdin: plan.stdin,
       allowFailure: plan.allowFailure,
       signal: plan.signal,
+      assertCurrent: plan.assertBeforeMutation,
     });
   }
 
