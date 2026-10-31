@@ -54,9 +54,12 @@ warns and `hooks info` reports them. Core does not emit them. A custom key only
 fires if custom code explicitly emits it; declaring it in metadata does not
 create a trigger.
 
-`command:stop` observes cancellation command handling. It is not a natural
-agent-finalization gate. For that contract, see `before_agent_finalize` in
-[Plugin hooks](/plugins/hooks).
+`command:stop` observes authorized channel-user Stop handling (including fast
+and bare stop words), `chat.abort`/`sessions.abort` client requests, Talk voice
+cancellation, and `/acp cancel`. It does
+not fire for interrupt, restart, watchdog, operator revocation, or supersession,
+and it is not a natural agent-finalization gate. For that contract, see
+`before_agent_finalize` in [Plugin hooks](/plugins/hooks).
 
 ### Event context highlights
 

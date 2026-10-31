@@ -47,12 +47,7 @@ export type PluginHookSessionContext = {
   endedTranscript?: PluginHookEndedTranscript;
 };
 
-type SessionEndTranscriptAvailableSource = {
-  available: true;
-  readTail(
-    options: PluginHookEndedTranscriptReadOptions,
-  ): Promise<PluginHookEndedTranscriptReadResult>;
-};
+type SessionEndTranscriptAvailableSource = Extract<PluginHookEndedTranscript, { available: true }>;
 
 export type SessionEndTranscriptSource = EndedSessionFacts &
   (
@@ -79,18 +74,6 @@ export function attachSessionEndTranscriptSource(
     value: source,
     writable: false,
   });
-}
-
-function readSessionEndTranscriptSource(
-  context: PluginHookSessionContext,
-): SessionEndTranscriptSource {
-  return (
-    // SAFETY: attachSessionEndTranscriptSource is the sole writer for this private symbol.
-    (context as SessionEndContextWithSource)[sessionEndTranscriptSource] ?? {
-      available: false,
-      reason: "unsupported-source",
-    }
-  );
 }
 
 function createScopedEndedTranscript(
@@ -154,7 +137,12 @@ export function projectSessionEndTranscriptContext(
       dispose() {},
     };
   }
-  const source = readSessionEndTranscriptSource(context);
+  const source: SessionEndTranscriptSource =
+    // SAFETY: attachSessionEndTranscriptSource is the sole writer for this private symbol.
+    (context as SessionEndContextWithSource)[sessionEndTranscriptSource] ?? {
+      available: false,
+      reason: "unsupported-source",
+    };
   const scoped = createScopedEndedTranscript(source, lifecycleSignal);
   return {
     context: { ...context, endedTranscript: scoped.capability },

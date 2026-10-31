@@ -1,9 +1,10 @@
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { useCompactHooksSessionFixture } from "./compact.hooks.fixture.test-support.js";
 import {
@@ -18,6 +19,7 @@ let compact: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let hooks: typeof import("../../hooks/internal-hooks.js");
 let memory: typeof import("../../hooks/bundled/session-memory/handler.js");
 let dateTime: typeof import("../date-time.js");
+let runtimeConfig: typeof import("../../config/runtime-snapshot.js");
 let storePath: string;
 let source: Awaited<ReturnType<typeof fixture.prepareSession>>;
 
@@ -26,11 +28,16 @@ beforeAll(async () => {
   hooks = await import("../../hooks/internal-hooks.js");
   memory = await import("../../hooks/bundled/session-memory/handler.js");
   dateTime = await import("../date-time.js");
+  runtimeConfig = await import("../../config/runtime-snapshot.js");
   storePath = await fixture.prepare();
 });
 
 beforeEach(async () => {
   source = await fixture.prepareSession();
+  runtimeConfig.setRuntimeConfigSnapshot({
+    agents: { defaults: { workspace: source.workspaceDir } },
+    session: { store: storePath },
+  });
   vi.mocked(dateTime.resolveUserTimezone).mockReturnValue("UTC");
   const actual = await vi.importActual<typeof hooks>("../../hooks/internal-hooks.js");
   vi.mocked(hooks.triggerInternalHook).mockImplementation(actual.triggerInternalHook);
@@ -39,6 +46,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   hooks.unregisterInternalHook("session:compacted", memory.default);
+  runtimeConfig.clearRuntimeConfigSnapshot();
 });
 
 describe("direct compaction lifecycle memory", () => {
@@ -85,9 +93,9 @@ describe("direct compaction lifecycle memory", () => {
         workspaceDir: source.workspaceDir,
       });
       expect(result).toMatchObject({ ok: true, compacted: true });
-      const files = (
-        await readdir(join(source.workspaceDir, "memory"), { recursive: true })
-      ).filter((file) => file.endsWith(".md"));
+      const files = (await listDirectoryTreeStrict(join(source.workspaceDir, "memory")))
+        .filter(({ dirent, relativePath }) => dirent.isFile() && relativePath.endsWith(".md"))
+        .map(({ relativePath }) => relativePath.replaceAll("\\", "/"));
       expect(files).toHaveLength(1);
       const file = expectDefined(files[0], "compaction Event");
       expect(file).toMatch(/^Channel\/[^/]+\/Thread\/[^/]+\/Event\//);

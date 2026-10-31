@@ -23,6 +23,8 @@ import {
   type SessionEndTranscriptSource,
 } from "../../plugins/session-end-transcript.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.owner-context.js";
+import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 
 type ReplySessionEndReason = Extract<
   PluginHookSessionEndReason,
@@ -70,9 +72,7 @@ function buildSessionHookContext(params: SessionHookContext): SessionHookContext
 }
 
 export function buildSessionStartHookPayload(
-  params: SessionHookContext & {
-    resumedFrom?: string;
-  },
+  params: SessionHookContext & PluginHookSessionStartEvent,
 ): {
   event: PluginHookSessionStartEvent;
   context: SessionHookContext;
@@ -92,25 +92,23 @@ function emitReplySessionStartHook(
   params: Parameters<typeof buildSessionStartHookPayload>[0],
 ): void {
   const payload = buildSessionStartHookPayload(params);
-  // Lifecycle hooks outlive their requester; deferred plugin work must belong
-  // to the detached scope that keeps the Gateway drain alive until completion.
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await hookRunner.runSessionStart(payload.event, payload.context);
-  }, "hooks:session-start").catch(() => {});
+  // Lifecycle hooks outlive their requester and must not inherit its writer
+  // lane or controller ownership while their detached work keeps drain alive.
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await runOutsideStoreWriterContext(() =>
+        hookRunner.runSessionStart(payload.event, payload.context),
+      );
+    }, "hooks:session-start"),
+  ).catch(() => {});
 }
 
 export function buildSessionEndHookPayload(
-  params: SessionHookContext & {
-    messageCount?: number;
-    durationMs?: number;
-    reason?: PluginHookSessionEndReason;
-    sessionFile?: string;
-    transcriptArchived?: boolean;
-    nextSessionId?: string;
-    nextSessionKey?: string;
-    sessionEntry?: SessionEntry;
-    endedTranscript?: SessionEndTranscriptSource;
-  },
+  params: SessionHookContext &
+    Partial<PluginHookSessionEndEvent> & {
+      sessionEntry?: SessionEntry;
+      endedTranscript?: SessionEndTranscriptSource;
+    },
 ): {
   event: PluginHookSessionEndEvent;
   context: SessionHookContext;
@@ -163,9 +161,13 @@ function emitReplySessionEndHook(params: {
       )
     : { available: false as const, reason: "unsupported-source" as const };
   const payload = buildSessionEndHookPayload({ ...params, endedTranscript });
-  void runWithGatewayDetachedWorkContinuation(async () => {
-    await params.hookRunner.runSessionEnd(payload.event, payload.context);
-  }, "hooks:session-end").catch(() => {});
+  void runWithSessionControllerCleanup(() =>
+    runWithGatewayDetachedWorkContinuation(async () => {
+      await runOutsideStoreWriterContext(() =>
+        params.hookRunner.runSessionEnd(payload.event, payload.context),
+      );
+    }, "hooks:session-end"),
+  ).catch(() => {});
 }
 
 export function emitReplySessionLifecycleHooks(
@@ -182,7 +184,7 @@ export function emitReplySessionLifecycleHooks(
   if (!hookRunner || !params.isFirstSessionTurn) {
     return;
   }
-  const { agentId, cfg, sessionId, sessionKey, storePath, previousSessionEntry } = params;
+  const { agentId, sessionId, sessionKey, storePath, previousSessionEntry } = params;
   if (previousSessionEntry?.sessionId) {
     // The shutdown finalizer must not re-fire session_end for a session
     // that is being replaced here; forget unconditionally so the next drain
@@ -206,7 +208,6 @@ export function emitReplySessionLifecycleHooks(
     // Track the new session so the shutdown finalizer fires a typed
     // session_end if the Gateway stops while this session is still active.
     noteActiveSessionForShutdown({
-      cfg,
       sessionKey,
       sessionId,
       storePath,

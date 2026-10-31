@@ -23,7 +23,6 @@ export function getSubagentSessionStartedAt(
   return asFiniteNumber(entry?.sessionStartedAt) ?? asFiniteNumber(entry?.execution.startedAt);
 }
 
-/** Computes accumulated runtime including the current live run when still active. */
 export function getSubagentSessionRuntimeMs(
   entry: SubagentSessionRuntimeRecord | null | undefined,
   now = Date.now(),
@@ -44,7 +43,6 @@ export function getSubagentSessionRuntimeMs(
   return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - startedAt));
 }
 
-/** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
 ): "queued" | "running" | "interrupted" | "killed" | "failed" | "timeout" | "done" | undefined {
@@ -80,6 +78,15 @@ export function resolveSubagentSessionStatus(
   return "done";
 }
 
+/** A yielded run waiting for a continuation: a message or its children's results. */
+export function isSubagentRunPausedForContinuation(entry: SubagentSessionStatusRecord): boolean {
+  if (entry.pauseReason !== "sessions_yield") {
+    return false;
+  }
+  const status = resolveSubagentSessionStatus(entry);
+  return status !== "killed" && status !== "failed" && status !== "timeout";
+}
+
 /** Formats the authoritative run status while preserving unfinished descendants. */
 export function resolveSubagentDisplayStatus(
   entry: SubagentSessionStatusRecord,
@@ -87,19 +94,11 @@ export function resolveSubagentDisplayStatus(
 ): string {
   const status = resolveSubagentSessionStatus(entry) ?? "done";
   const pending = Math.max(0, pendingDescendants);
-  if (
-    entry.pauseReason === "sessions_yield" &&
-    status !== "killed" &&
-    status !== "failed" &&
-    status !== "timeout"
-  ) {
-    return pending > 0
-      ? `waiting on ${pending} ${pending === 1 ? "child" : "children"}`
-      : "waiting for external continuation";
+  const waiting = `waiting on ${pending} ${pending === 1 ? "child" : "children"}`;
+  if (isSubagentRunPausedForContinuation(entry)) {
+    return pending > 0 ? waiting : "waiting for external continuation";
   }
   if (pending > 0) {
-    const childLabel = pending === 1 ? "child" : "children";
-    const waiting = `waiting on ${pending} ${childLabel}`;
     // Pending descendants keep the row active without hiding a terminal failure.
     return status === "running" || status === "done"
       ? `active (${waiting})`

@@ -2,11 +2,12 @@ import type { ChannelPreviewStreamingConfig, SessionThreadBindingsConfig } from 
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
+  ChannelGroupDmConfig,
   ChannelReactionConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
-import type { DiscordPresenceEventsConfig } from "./types.discord-presence.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -20,19 +21,12 @@ export type DiscordPluralKitConfig = {
 
 export type DiscordMentionAliasesConfig = Record<string, string>;
 
-export type DiscordDmConfig = {
-  /** If false, ignore all incoming Discord DMs. Default: true. */
-  enabled?: boolean;
-  /** If true, allow group DMs (default: false). */
-  groupEnabled?: boolean;
-  /** Optional allowlist for group DM channels (ids or slugs). */
-  groupChannels?: string[];
-};
+export type DiscordDmConfig = ChannelGroupDmConfig<string>;
 
 export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
   /** Fixed shared-memory group, using stable Discord user IDs, never sender allowlists. */
   members?: string[];
-  /** Channel memory participation policy. "always" makes the parent a launch entry only. */
+  /** Thread creation mode. "always" also excludes the launch parent's Channel memory. */
   threadMode?: "never" | "auto" | "always";
   /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
   requireMentionInBotThreads?: boolean;
@@ -48,7 +42,7 @@ export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFro
   roles?: string[];
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
-  /** If true, automatically create a thread for each new message in this channel. */
+  /** Legacy automatic Thread creation when threadMode is omitted. */
   autoThread?: boolean;
   /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
@@ -59,25 +53,35 @@ export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFro
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
 export type DiscordGuildEntry = Pick<
-  CommonChannelGroupConfig,
-  "requireMention" | "tools" | "toolsBySender"
+  DiscordGuildChannelConfig,
+  | "requireMention"
+  | "requireMentionInBotThreads"
+  | "ignoreOtherMentions"
+  | "tools"
+  | "toolsBySender"
+  | "users"
+  | "roles"
 > & {
   slug?: string;
-  /** Default for bot-created threads unless the channel overrides it. */
-  requireMentionInBotThreads?: boolean;
-  /**
-   * If true, drop messages addressed to another identity by mention or bot reply, but not this
-   * bot (not @everyone/@here).
-   * Default: false.
-   */
-  ignoreOtherMentions?: boolean;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
-  /** Optional allowlist for guild senders (ids or names). */
-  users?: string[];
-  /** Optional allowlist for guild senders by role ID. */
-  roles?: string[];
-  presenceEvents?: DiscordPresenceEventsConfig;
+  presenceEvents?: {
+    /** Enable online-presence system events for this guild. Default: true when configured. */
+    enabled?: boolean;
+    /** Discord channel ID that receives the routed agent wake. */
+    channelId: string;
+    /** Optional immutable Discord user ID allowlist. Omit to include all human members. */
+    users?: string[];
+    /**
+     * Suppress presence-derived online events for this many seconds after a new Gateway
+     * session while guild presence state is rebuilt. 0 disables. Default: 300.
+     */
+    reconnectSuppressSeconds?: number;
+    /** Maximum queued online events for this guild per burst window. Default: 8. */
+    burstLimit?: number;
+    /** Sliding burst-detection window in seconds. Default: 60. */
+    burstWindowSeconds?: number;
+  };
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -118,19 +122,13 @@ export type DiscordIntentsConfig = {
   voiceStates?: boolean;
 };
 
-export type DiscordVoiceAutoJoinConfig = {
-  /** Guild ID that owns the voice channel. */
-  guildId: string;
-  /** Voice channel ID to join. */
-  channelId: string;
+export type DiscordVoiceAutoJoinConfig = DiscordVoiceAllowedChannelConfig & {
   /** Join and remain connected only while at least one human is in the channel. Default: false. */
   whenOccupied?: boolean;
 };
 
 export type DiscordVoiceAllowedChannelConfig = {
-  /** Guild ID that owns the voice channel. */
   guildId: string;
-  /** Voice channel ID allowed for realtime voice sessions. */
   channelId: string;
 };
 
@@ -149,7 +147,6 @@ export type DiscordVoiceRealtimeConfig = {
   model?: string;
   /** Provider realtime output voice name, for example "cedar". */
   speakerVoice?: string;
-  /** Provider realtime output voice id. */
   speakerVoiceId?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;
@@ -282,22 +279,18 @@ export type DiscordAccountConfig = Omit<
     maxLinesPerMessage?: number;
     /** Per-action tool gating (default: true for all). */
     actions?: DiscordActionConfig;
-    /** Thread session behavior. */
     thread?: DiscordThreadConfig;
     dm?: DiscordDmConfig;
-    /** New per-guild config keyed by guild id or slug. */
+    /** Per-guild config keyed by guild id or slug. */
     guilds?: Record<string, DiscordGuildEntry>;
-    /** Exec approval forwarding configuration. */
     execApprovals?: DiscordExecApprovalConfig;
     /** Agent-controlled interactive components (buttons, select menus). */
     agentComponents?: DiscordAgentComponentsConfig;
-    /** Slash command configuration. */
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */
     threadBindings?: DiscordThreadBindingsConfig;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
-    /** Voice channel conversation settings. */
     voice?: DiscordVoiceConfig;
     /** PluralKit identity resolution for proxied messages. */
     pluralkit?: DiscordPluralKitConfig;
@@ -326,9 +319,4 @@ export type DiscordAccountConfig = Omit<
     };
   };
 
-export type DiscordConfig = {
-  /** Optional per-account Discord configuration (multi-account). */
-  accounts?: Record<string, DiscordAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & DiscordAccountConfig;
+export type DiscordConfig = MultiAccountChannelConfig<DiscordAccountConfig>;

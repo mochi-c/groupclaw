@@ -116,7 +116,9 @@ export async function markDreamSessionEnded(params: {
       params.assertCurrent();
       await writeDreamFragmentSource(params.workspaceDir, {
         ...source,
-        session: source.session ?? params.session,
+        // The departing owner captures the final participants, including people
+        // who joined after the Fragment was first recorded.
+        session: params.session,
         endedSession: true,
       });
     }
@@ -130,14 +132,14 @@ export async function recordDreamEventSource(params: {
   assertCurrent(): void;
 }): Promise<void> {
   return withMemoryWorkspaceLock(params.workspaceDir, async () => {
-    const { listMemorySessionTombstones, recordMemoryEntryOrigins } =
+    const { findForgottenMemorySessionIds, recordMemoryEntryOrigins } =
       await import("./memory-entry-origins.js");
-    const tombstones = await listMemorySessionTombstones({
+    const tombstones = await findForgottenMemorySessionIds({
       agentId: params.source.agentId,
       sessionIds: [params.source.sessionId],
     });
     params.assertCurrent();
-    if (tombstones.length) {
+    if (tombstones.size) {
       throw new Error("Dream Event belongs to an explicitly forgotten session");
     }
     await recordMemoryEntryOrigins({

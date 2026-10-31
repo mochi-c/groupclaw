@@ -32,6 +32,7 @@ export function answerCandidate(
   itemId: string,
   progressText: string,
   status: "candidate" | "selected" | "superseded" = "candidate",
+  source = "codex-app-server",
 ) {
   return {
     itemId,
@@ -40,7 +41,7 @@ export function answerCandidate(
     phase: "update",
     status,
     progressText,
-    source: "codex-app-server",
+    source,
     hideFromChannelProgress: true,
   };
 }
@@ -162,5 +163,5 @@ function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
 }
 
 function emitLifecycleEnd(handler: Parameters<typeof emitAgentEvent>[0], runId: string, seq = 2) {
-  emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
+  return emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
 }

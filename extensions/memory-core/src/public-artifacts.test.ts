@@ -1,34 +1,30 @@
-// Memory Core tests cover public artifacts plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../api.js";
 import plugin from "../index.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+afterEach(() => {
+  resetPluginStateStoreForTests();
+  vi.unstubAllEnvs();
+});
 const registerMemoryCapability = vi.fn<OpenClawPluginApi["registerMemoryCapability"]>();
 plugin.register(createTestPluginApi({ registerMemoryCapability }));
 const publicArtifacts = registerMemoryCapability.mock.calls[0]?.[0].publicArtifacts;
-if (!publicArtifacts) {
-  throw new Error("expected memory-core to register public artifacts");
-}
+assert(publicArtifacts, "expected memory-core to register public artifacts");
 
 describe("memory-core public artifacts", () => {
   let fixtureRoot = "";
 
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-core-public-artifacts-"));
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  beforeAll(() => {
+    fixtureRoot = tempDirs.make("memory-core-public-artifacts-");
   });
 
   afterEach(() => {

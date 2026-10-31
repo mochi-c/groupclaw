@@ -5,9 +5,60 @@ import { createMemoryCoreTestHarness } from "../test-helpers.js";
 import { mergeHybridResults } from "./hybrid.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const NOW_MS = Date.UTC(2026, 1, 10, 0, 0, 0);
+const DAY_MS = 86_400_000;
+const NOW_MS = Date.UTC(2026, 1, 10);
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+const selective = { path: "notes", pattern: "stable/**/*.md", evergreen: true };
+const notePaths = ["notes/stable/topic.md", "notes/dated/topic.md"];
+const dated = ["memory/2026-01-11.md"];
+const memoryPolicy = { path: "memory", evergreen: true };
+const sessions = ["sessions/main/note.jsonl"];
+const sessionPolicy = { path: "sessions", evergreen: true };
+
+it.each([
+  [notePaths, 30, [1, 0.5], selective, "memory", undefined, false],
+  [notePaths, 0, [1, 0.5], selective, "memory", 30, false],
+  [["memory/MEMORY.md"], 90, [1], undefined, "memory", 90, false],
+  [dated, 90, [0.5], memoryPolicy, "memory", 90, false],
+  [dated, 90, [0.5], memoryPolicy, "memory", 90, true],
+  [sessions, 90, [1], sessionPolicy, "sessions", undefined, false],
+  [sessions, 90, [0.5], sessionPolicy, "sessions", 30, false],
+] as const)(
+  "ranks %j with filesystem age %s and expected scores %j",
+  async (files, age, expected, extraPath, source, indexedAge, absolute) => {
+    const workspaceDir = await createTempWorkspace("openclaw-temporal-decay-");
+    for (const file of files) {
+      const filename = path.join(workspaceDir, file);
+      await fs.mkdir(path.dirname(filename), { recursive: true });
+      await fs.writeFile(filename, "memory\n");
+      const mtime = new Date(NOW_MS - age * DAY_MS);
+      await fs.utimes(filename, mtime, mtime);
+    }
+    const results = files.map((file) => ({
+      path: absolute ? path.join(workspaceDir, file) : file,
+      score: 1,
+      source,
+    }));
+    const mtimes = new Map(
+      results.map((entry) => [
+        entry.path,
+        indexedAge === undefined ? undefined : NOW_MS - indexedAge * DAY_MS,
+      ]),
+    );
+    const ranked = await applyTemporalDecayToHybridResults({
+      results,
+      workspaceDir,
+      extraPaths: extraPath ? [extraPath] : undefined,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+      memorySourceMtimes: source === "memory" && indexedAge !== undefined ? mtimes : undefined,
+      sessionSourceMtimes: source === "sessions" ? mtimes : undefined,
+    });
+    for (const [index, score] of expected.entries()) {
+      expect(ranked[index]?.score).toBeCloseTo(score, 2);
+    }
+  },
+);
 
 function createVectorMemoryEntry(memoryPath: string, vectorScore: number) {
   return {
@@ -28,7 +79,7 @@ async function mergeVectorResultsWithTemporalDecay(
     vectorWeight: 1,
     textWeight: 0,
     temporalDecay: { enabled: true, halfLifeDays: 30 },
-    mmr: { enabled: false },
+    mmr: { enabled: false, lambda: 0.7 },
     nowMs: NOW_MS,
     vector,
     keyword: [],
@@ -46,6 +97,7 @@ describe("temporal decay", () => {
       keyword: [],
       vectorWeight: 1,
       textWeight: 0,
+      mmr: { enabled: false, lambda: 0.7 },
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       nowMs: NOW_MS,
       memorySourceMtimes: new Map(paths.map((filePath) => [filePath, NOW_MS - 30 * DAY_MS])),
@@ -115,61 +167,5 @@ describe("temporal decay", () => {
       rootOld?.score ?? 0,
     );
     expect(byPath.get("memory/dreaming/light/report.md")?.score).toBeCloseTo(0.7);
-  });
-
-  it("decays nested dated and slugged memory files with Windows-style separators", async () => {
-    const merged = await mergeVectorResultsWithTemporalDecay([
-      createVectorMemoryEntry("memory\\dreaming\\light\\2025-01-01.md", 0.95),
-      createVectorMemoryEntry("memory\\dreaming\\light\\2025-01-01-1430.md", 0.95),
-      createVectorMemoryEntry("memory\\dreaming\\light\\report.md", 0.7),
-    ]);
-
-    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
-    expect(byPath.get("memory\\dreaming\\light\\2025-01-01.md")?.score ?? 1).toBeLessThan(0.5);
-    expect(byPath.get("memory\\dreaming\\light\\2025-01-01-1430.md")?.score ?? 1).toBeLessThan(0.5);
-    expect(byPath.get("memory\\dreaming\\light\\report.md")?.score).toBeCloseTo(0.7);
-  });
-
-  it("handles future dates, zero age, and very old memories", async () => {
-    const merged = await mergeVectorResultsWithTemporalDecay([
-      createVectorMemoryEntry("memory/2099-01-01.md", 0.9),
-      createVectorMemoryEntry("memory/2026-02-10.md", 0.8),
-      createVectorMemoryEntry("memory/2000-01-01.md", 1),
-    ]);
-
-    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
-    expect(byPath.get("memory/2099-01-01.md")?.score).toBeCloseTo(0.9);
-    expect(byPath.get("memory/2026-02-10.md")?.score).toBeCloseTo(0.8);
-    expect(byPath.get("memory/2000-01-01.md")?.score ?? 1).toBeLessThan(0.001);
-  });
-
-  it("uses file mtime for additional memory files", async () => {
-    const dir = await createTempWorkspace("openclaw-temporal-decay-");
-    const filePath = path.join(dir, "notes", "topic.md");
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, "notes\n");
-    const oldMtime = new Date(NOW_MS - 30 * DAY_MS);
-    await fs.utimes(filePath, oldMtime, oldMtime);
-
-    const decayed = await applyTemporalDecayToHybridResults({
-      results: [{ path: "notes/topic.md", score: 1, source: "memory" }],
-      workspaceDir: dir,
-      temporalDecay: { enabled: true, halfLifeDays: 30 },
-      nowMs: NOW_MS,
-    });
-
-    expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
-  });
-
-  it("leaves session timestamps unknown when their indexed source is missing", async () => {
-    const entry = { path: "sessions/main/missing.jsonl", score: 1, source: "sessions" };
-    expect(
-      await applyTemporalDecayToHybridResults({
-        results: [entry],
-        temporalDecay: { enabled: true, halfLifeDays: 30 },
-        sessionSourceMtimes: new Map(),
-        nowMs: NOW_MS,
-      }),
-    ).toEqual([entry]);
   });
 });

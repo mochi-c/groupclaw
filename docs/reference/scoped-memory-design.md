@@ -123,7 +123,7 @@ runtime opt-in. Conversation tools require an audience, while sessionless and on
 CLI callers retain their operator path. Audience-aware tools-arm flushes can run in a
 read-only sandbox; file-arm flushes still require a writable workspace.
 
-### Conversation project execution
+## Conversation project execution
 
 OpenClaw conversation audiences retain scripts and builds in an independent
 Docker or Podman project. The sandbox owner binds its directory and runtime to
@@ -200,9 +200,29 @@ when no ended Event receipt exists. It does not synthesize an empty Event when
 the reader is unavailable. A Fragment path or source ID never grants publication
 authority.
 `memory_get` retains its exact path-based excerpt contract, and `memory_read`
-adapts artifact references to that same authorized reader. `threadMode` currently controls
-memory participation and routing isolation; `autoThread` still owns automatic Thread
-creation, and `replyMode` plus semantic Thread selection remain proposed.
+adapts artifact references to that same authorized reader. `threadMode` now controls
+Thread creation as well as memory participation: `never` suppresses creation,
+`auto` uses a bounded semantic suitability decision, and `always` creates or
+reuses the initiating message's Thread. Failed required creation stops before
+agent ingress and explains how to retry. Native commands in an `always` parent
+require an existing Thread because Slash interactions have no initiating-message
+anchor. When `threadMode` is omitted, legacy `autoThread` behavior remains.
+`replyMode` and reuse of unrelated existing topic Threads remain proposed.
+
+Memory admission resolves verified platform links through the Profile identity
+owner. Unlinking a person or changing the configured group invalidates retained
+memory grants; reverting the configuration does not revive them. Public Thread
+contributors admitted by the host are also eligible User publication subjects.
+Existing User files are not automatically merged or migrated after identity
+changes.
+
+Fragment Dream uses the current Deep phase's model, thinking level, output-token
+budget, temperature, and timeout, including numeric execution defaults inherited
+by the phase. Speed defaults map to 60/120/240-second timeouts, and budget
+defaults map to 4,000/8,000/16,000 output tokens. Each resulting publication is
+capped at 48,000 characters after covered-entry removals. Exceeding that bound
+defers the plan and preserves its sources and prior target; existing oversized
+targets remain deferred.
 Configured-group admission is currently Discord-specific;
 other channel integrations
 defer Fragment processing and block Workspace publication. Scope columns in the memory index are deferred until path-prefix
@@ -245,19 +265,29 @@ knowledge. The first complete journey is shared planning: a discussion
 establishes preferences and Thread decisions, a later discussion recalls them
 with their origin, and a participant corrects them through conversation.
 
+The October 29 clarification confirms one family with a fixed membership set.
+Multiple chat groups and Channels organize topics and conversation context;
+they are not separate audiences requiring separate personal memory. One shared
+Workspace Memory and one User Memory per person are intentional. Channel and
+Thread memory keep the current discussion focused, while explicit retrieval and
+Dream can connect authorized knowledge across the family's discussions.
+No per-chat-group User partition, separate-Workspace deployment, or group-based
+migration is required for this product scope. The configured `members` on these
+Channels should describe the same fixed family roster.
+
 ### Reply and Thread configuration
 
-Each Discord Channel independently selects a reply mode and a Thread mode.
-The following fields are proposed contracts; they are not shipped settings.
+Each Discord Channel independently selects a Thread mode. `threadMode` is
+implemented; `replyMode` remains a proposed setting.
 
-| Proposed field | Value       | Observable behavior                                                        |
-| -------------- | ----------- | -------------------------------------------------------------------------- |
-| `replyMode`    | `mention`   | Respond when explicitly addressed.                                         |
-| `replyMode`    | `always`    | Respond to admitted messages without requiring a mention.                  |
-| `replyMode`    | `selective` | Consider unmentioned discussions and respond when a contribution helps.    |
-| `threadMode`   | `never`     | Do not create a Thread for a reply; continue within existing Threads.      |
-| `threadMode`   | `auto`      | Create or reuse a Thread when a separate ongoing topic helps.              |
-| `threadMode`   | `always`    | Put each Channel reply in a Thread associated with its initiating message. |
+| Proposed field | Value       | Observable behavior                                                                                                |
+| -------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| `replyMode`    | `mention`   | Respond when explicitly addressed.                                                                                 |
+| `replyMode`    | `always`    | Respond to admitted messages without requiring a mention.                                                          |
+| `replyMode`    | `selective` | Consider unmentioned discussions and respond when a contribution helps.                                            |
+| `threadMode`   | `never`     | Do not create a Thread for a reply; continue within existing Threads.                                              |
+| `threadMode`   | `auto`      | Semantically select creation when a separate ongoing topic helps; reuse an initiating message's associated Thread. |
+| `threadMode`   | `always`    | Put each Channel reply in a Thread associated with its initiating message.                                         |
 
 **Assumption to verify in use:** explicit addressing means mentioning the bot
 or replying to its message, rather than requiring both. Selective participation
@@ -1881,7 +1911,8 @@ Create a generic host-owned contract near the existing memory audience types:
 
 ```ts
 export type ConversationMemoryScope =
-  { kind: "channel"; channelId: string } | { kind: "thread"; channelId: string; threadId: string };
+  | { kind: "channel"; channelId: string }
+  | { kind: "thread"; channelId: string; threadId: string };
 
 export type MemoryTurnIdentity = {
   conversation: ConversationMemoryScope;

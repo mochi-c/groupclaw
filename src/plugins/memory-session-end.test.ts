@@ -13,18 +13,18 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildSessionEndHookPayload } from "../auto-reply/reply/session-hooks.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  patchSessionEntryCore,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createClosedSessionTranscriptSource } from "../gateway/session-end-transcript-reader.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "../memory-host-sdk/dreaming.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -144,12 +144,15 @@ it.each([true, false])(
       on,
       registerCli,
       registerService: (registered) => {
-        service = registered;
+        if (registered.id === "memory-core-dreaming") {
+          service = registered;
+        }
       },
       registerMemoryCapability: (capability) => registerMemoryCapability("memory-core", capability),
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     });
     Object.assign(api.runtime, {
+      agent: createPluginRuntimeMock().agent,
       config: { current: () => fixture.cfg },
       subagent: { complete },
       state: {
@@ -237,9 +240,14 @@ it.each([true, false])(
     await createHookRunner(registry).runSessionEnd(payload.event, payload.context);
     expect(api.logger.warn).not.toHaveBeenCalled();
     const memoryDir = path.join(fixture.workspaceDir, "memory");
-    const eventFiles = (await fs.readdir(memoryDir, { recursive: true })).filter(
-      (file) => file.split(path.sep).includes("Event") && file.endsWith(".md"),
-    );
+    const eventFiles = (await listDirectoryTreeStrict(memoryDir))
+      .filter(
+        ({ dirent, relativePath }) =>
+          dirent.isFile() &&
+          relativePath.split(path.sep).includes("Event") &&
+          relativePath.endsWith(".md"),
+      )
+      .map(({ relativePath }) => relativePath);
     expect(eventFiles).toHaveLength(conversationAccessAllowed ? 1 : 0);
     if (!conversationAccessAllowed) {
       expect(complete).not.toHaveBeenCalled();

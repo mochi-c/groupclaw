@@ -34,12 +34,15 @@ export function resolveRootMemoryRepairDir(workspaceDir: string): string {
 }
 
 /** Checks for an exact directory entry without case-folded path lookup. */
-async function exactWorkspaceEntryExists(dir: string, name: string): Promise<boolean> {
+export async function exactWorkspaceEntryExists(dir: string, name: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(dir);
     return entries.includes(name);
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -61,8 +64,11 @@ export async function exactWorkspaceRelativePathExists(
         return false;
       }
       current = path.join(current, segment);
-    } catch {
-      return false;
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        return false;
+      }
+      throw error;
     }
   }
   return true;

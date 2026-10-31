@@ -7,7 +7,10 @@ import {
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -80,7 +83,7 @@ describe("curated memory index", () => {
     );
     const manager = await getFreshManager(createCfg({ provider: "none" }));
     await manager.sync({ reason: "test", force: true });
-    const db = Reflect.get(manager, "db") as DatabaseSync;
+    const db = memoryIndexFixtureWriter(manager);
     db.prepare(
       `UPDATE ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE}
        SET origin_class = 'untrusted'

@@ -162,7 +162,7 @@ function renderPersonaInstructions(files: readonly EmbeddedContextFile[]): strin
     return undefined;
   }
   const preamble =
-    "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
+    "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the instructions that define who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
     (files.some((file) => file.personalUser === true)
       ? ` ${PERSONAL_USER_CONTEXT_INSTRUCTIONS}`
       : "");
@@ -205,9 +205,7 @@ function isWorkspaceMemoryPath(filePath: string, workspaceDir: string): boolean 
   if (!normalized) {
     return false;
   }
-  const absolutePath = path.isAbsolute(normalized)
-    ? path.resolve(normalized)
-    : path.resolve(workspaceDir, normalized);
+  const absolutePath = path.resolve(workspaceDir, normalized);
   return isCuratedMemoryRelativePath(
     path.relative(path.resolve(workspaceDir), absolutePath).replaceAll(path.sep, "/"),
   );

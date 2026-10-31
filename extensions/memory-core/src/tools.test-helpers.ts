@@ -3,6 +3,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import type { MemoryToolOptions } from "./memory-tool-contract.js";
+import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
 import { createMemoryContextReadTool } from "./tools.context-read.js";
 import { createMemoryFragmentAppendTool } from "./tools.fragment-append.js";
@@ -25,6 +26,7 @@ export function createMemorySearchToolOrThrow(params?: {
   activeProjectKeys?: readonly string[];
 }) {
   const tool = createMemorySearchTool({
+    runInBackgroundContext: runInMemoryTestBackgroundContext,
     config: params?.config ? asOpenClawConfig(params.config) : createDefaultMemoryToolConfig(),
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),

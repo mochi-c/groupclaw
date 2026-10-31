@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
@@ -7,23 +6,26 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { withMemoryDreamSource } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
-import { patchSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { readDreamFragmentNotebook, readDreamFragmentSources } from "./dreaming-fragment-state.js";
+import {
+  markDreamSessionEnded,
+  readDreamFragmentNotebook,
+  readDreamFragmentSources,
+} from "./dreaming-fragment-state.js";
 import * as fragmentState from "./dreaming-fragment-state.js";
+import { appendDreamFragment } from "./dreaming-fragments.test-helpers.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
-import { appendAgentMemoryFragmentFile } from "./fragment-memory-write.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { createMemoryForgetFixture } from "./memory-forget.test-helpers.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
@@ -131,7 +133,11 @@ describe("Fragment Dream background flow", () => {
       },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     });
-    Object.assign(api.runtime, { subagent: { complete }, config: { current: () => fixture.cfg } });
+    Object.assign(api.runtime, {
+      agent: createPluginRuntimeMock().agent,
+      subagent: { complete },
+      config: { current: () => fixture.cfg },
+    });
     registerShortTermPromotionDreaming(api);
     const context = {
       config: fixture.cfg,
@@ -169,105 +175,26 @@ describe("Fragment Dream background flow", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  async function append(
+  function append(
     channel: string,
     content: string,
     thread?: string,
     visibility: "public" | "private" = "public",
   ) {
-    const sessionId = randomUUID();
-    const sessionKey = `agent:main:discord:${thread ?? channel}:${sessionId}`;
-    const entry: SessionEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      chatType: "channel",
-      delivery: {
-        kind: "external",
-        route: {
-          channel: "discord",
-          accountId: "default",
-          target: { to: `channel:${thread ?? channel}`, chatType: "channel" },
-          ...(thread ? { thread: { id: thread } } : {}),
-        },
-        context: {
-          channel: "discord",
-          accountId: "default",
-          to: `channel:${thread ?? channel}`,
-          ...(thread ? { threadId: thread } : {}),
-        },
-        origin: {
-          provider: "discord",
-          accountId: "default",
-          chatType: "channel",
-          nativeChannelId: thread ?? channel,
-          ...(thread
-            ? {
-                threadId: thread,
-                nativeParentChannelId: channel,
-                nativeThreadVisibility: visibility,
-              }
-            : {}),
-        },
-      },
-      participants: [
-        {
-          identity: {
-            type: "remote",
-            pluginId: "discord",
-            domain: "discord",
-            idKind: "user",
-            id: "1",
-          },
-          label: "Alice",
-        },
-      ],
-    };
-    await patchSessionEntry({
-      agentId: "main",
-      sessionKey,
-      fallbackEntry: entry,
-      update: () => entry,
-      replaceEntry: true,
-      skipMaintenance: true,
-    });
-    // Create upgrade evidence under an earlier, non-launch admission. Current
-    // configuration stays authoritative when the background pass reads it.
-    const admissionConfig = structuredClone(fixture.cfg);
-    if (!thread) {
-      admissionConfig.channels!.discord!.guilds!["900"]!.channels![channel]!.threadMode = "auto";
-    }
-    return withMemoryDreamSource(
-      {
-        agentId: "main",
-        sessionKey,
-        sessionId,
-        storePath: resolveStorePath(fixture.cfg.session?.store, { agentId: "main" }),
-        assertCurrent: () => {},
-        cfg: admissionConfig,
-      },
-      async (facts) => {
-        const relPath = facts.context.fragment!.resolveRelativePath({
-          createdDate: new Date().toISOString().slice(0, 10),
-        });
-        await appendAgentMemoryFragmentFile({
-          cfg: fixture.cfg,
-          agentId: "main",
-          relPath,
-          timeLabel: "10:00",
-          content,
-          source: { sessionKey, sessionId, createdAtMs: Date.now() },
-          assertCurrent: () => facts.assertCurrent(),
-        });
-        return { relPath, sessionId, sessionKey, entry };
-      },
-    );
+    return appendDreamFragment(fixture, channel, content, thread, visibility);
   }
 
   function planFor(message: string, scope = "workspace", fullyCovered = true) {
     const input = JSON.parse(message) as {
       fragments: Array<{ id: string; text: string }>;
       notebook: Array<{ text: string; sourceIds: string[] }>;
-      targets: Array<{ id: string; scope: string; content: string; archive: boolean }>;
+      targets: Array<{
+        id: string;
+        scope: string;
+        subject: string;
+        content: string;
+        archive: boolean;
+      }>;
       curated: Array<{ id: string; target: string; text: string; sourceIds: string[] }>;
     };
     const ids = input.fragments.map((fragment) => fragment.id);
@@ -295,6 +222,124 @@ describe("Fragment Dream background flow", () => {
       },
     };
   }
+
+  it("publishes an extra public Thread participant captured by the departing session owner", async () => {
+    const source = await append("100", "Visitor prefers written agendas.", "extra-participant");
+    await withMemoryWorkspaceLock(fixture.workspaceDir, () =>
+      markDreamSessionEnded({
+        workspaceDir: fixture.workspaceDir,
+        agentId: "main",
+        sessionKey: source.sessionKey,
+        sessionId: source.sessionId,
+        session: {
+          chatType: source.entry.chatType,
+          delivery: source.entry.delivery,
+          participants: [
+            ...(source.entry.participants ?? []),
+            {
+              identity: {
+                type: "remote",
+                pluginId: "discord",
+                domain: "discord",
+                idKind: "user",
+                id: "3",
+              },
+              label: "Visitor",
+            },
+          ],
+        },
+        assertCurrent: () => {},
+      }),
+    );
+    complete.mockImplementation(async ({ message }) => {
+      const { input, plan } = planFor(message, "user");
+      const visitor = input.targets.find(
+        (target) => target.scope === "user" && target.subject === "Visitor",
+      );
+      const publication = plan.publications[0];
+      if (!visitor || !publication) {
+        throw new Error("Dream request must admit the visitor's personal publication");
+      }
+      publication.targetId = visitor.id;
+      publication.content = "Visitor prefers written agendas.";
+      return { text: JSON.stringify(plan) };
+    });
+    await run();
+    expect(api.logger.warn).not.toHaveBeenCalled();
+    const notebook = await readDreamFragmentNotebook(fixture.workspaceDir);
+    expect(notebook.artifacts).toHaveLength(1);
+    const published = await fs.readFile(
+      path.join(fixture.workspaceDir, notebook.artifacts![0]!.target),
+      "utf8",
+    );
+    expect(published).toContain("Visitor prefers written agendas.");
+  });
+
+  it("uses the current deep Dream execution configuration at the cron boundary", async () => {
+    fixture.cfg.plugins!.entries!["memory-core"]!.config = {
+      dreaming: {
+        enabled: true,
+        phases: {
+          light: { enabled: false },
+          rem: { enabled: false },
+          deep: {
+            execution: {
+              model: "test-provider/dream-model",
+              thinking: "high",
+              maxOutputTokens: 8_000,
+              temperature: 0.2,
+              timeoutMs: 75_000,
+            },
+          },
+        },
+      },
+    };
+    await append("100", "Use UTC for schedules.", "101");
+    complete.mockImplementation(async ({ message }) => ({
+      text: JSON.stringify(planFor(message).plan),
+    }));
+    await run();
+    expect(api.logger.error).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "test-provider/dream-model",
+        reasoning: "high",
+        maxTokens: 8_000,
+        temperature: 0.2,
+        timeoutMs: 75_000,
+      }),
+    );
+  });
+
+  it("preserves sources and the target when publication would exceed its readable capacity", async () => {
+    const source = await append("100", "Use UTC for schedules.", "101");
+    const memoryPath = path.join(fixture.workspaceDir, "memory/MEMORY.md");
+    const original = "Existing convention.\n".repeat(2_000);
+    await fs.writeFile(memoryPath, original);
+    complete.mockImplementationOnce(async ({ message }) => {
+      const { plan } = planFor(message);
+      plan.publications[0]!.content = "Additional convention.\n".repeat(500);
+      return { text: JSON.stringify(plan) };
+    });
+    await run();
+    expect(api.logger.warn).toHaveBeenCalledWith(expect.stringContaining("capacity exceeded"));
+    expect(await fs.readFile(memoryPath, "utf8")).toBe(original);
+    expect(await fs.readFile(path.join(fixture.workspaceDir, source.relPath), "utf8")).toContain(
+      "Use UTC",
+    );
+    expect((await readDreamFragmentSources(fixture.workspaceDir))[0]).toMatchObject({
+      sessionId: source.sessionId,
+    });
+    expect((await readDreamFragmentSources(fixture.workspaceDir))[0]?.processed).not.toBe(true);
+    expect((await readDreamFragmentNotebook(fixture.workspaceDir)).pending).toBeUndefined();
+
+    complete.mockImplementationOnce(async ({ message }) => ({
+      text: JSON.stringify(planFor(message).plan),
+    }));
+    await run();
+    expect(await fs.readFile(memoryPath, "utf8")).toContain("Use UTC for shared schedules.");
+    expect((await readDreamFragmentSources(fixture.workspaceDir))[0]?.processed).toBe(true);
+  });
 
   it("synthesizes cross-Channel sources once, cleans covered entries, and forgets the replacement", async () => {
     const first = await append("100", "Workspace convention: use UTC for all schedules.", "101");

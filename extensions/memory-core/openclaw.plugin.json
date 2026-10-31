@@ -1,4 +1,9 @@
 {
+  "controlUi": {
+    "entry": "dist/control-ui/overview/index.js",
+    "activation": "settings-only",
+    "settingsViews": [{"section": "memory", "panel": "overview"}, {"section": "memory", "panel": "memories"}]
+  },
   "id": "memory-core",
   "categories": ["memory"],
   "doctorContract": {
@@ -150,6 +155,31 @@
                 "properties": {
                   "model": {
                     "type": "string"
+                  },
+                  "speed": {
+                    "type": "string",
+                    "enum": ["fast", "balanced", "slow"]
+                  },
+                  "thinking": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"]
+                  },
+                  "budget": {
+                    "type": "string",
+                    "enum": ["cheap", "medium", "expensive"]
+                  },
+                  "maxOutputTokens": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "temperature": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1
                   }
                 }
               }
@@ -185,6 +215,31 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "speed": {
+                        "type": "string",
+                        "enum": ["fast", "balanced", "slow"]
+                      },
+                      "thinking": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"]
+                      },
+                      "budget": {
+                        "type": "string",
+                        "enum": ["cheap", "medium", "expensive"]
+                      },
+                      "maxOutputTokens": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "temperature": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 2
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1
                       }
                     }
                   }
@@ -242,6 +297,31 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "speed": {
+                        "type": "string",
+                        "enum": ["fast", "balanced", "slow"]
+                      },
+                      "thinking": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"]
+                      },
+                      "budget": {
+                        "type": "string",
+                        "enum": ["cheap", "medium", "expensive"]
+                      },
+                      "maxOutputTokens": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "temperature": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 2
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1
                       }
                     }
                   }
@@ -273,6 +353,31 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "speed": {
+                        "type": "string",
+                        "enum": ["fast", "balanced", "slow"]
+                      },
+                      "thinking": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"]
+                      },
+                      "budget": {
+                        "type": "string",
+                        "enum": ["cheap", "medium", "expensive"]
+                      },
+                      "maxOutputTokens": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "temperature": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 2
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1
                       }
                     }
                   }

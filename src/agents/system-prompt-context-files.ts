@@ -25,8 +25,7 @@ export function isBootstrapContextFile(pathValue: string): boolean {
 }
 
 function sanitizeContextFileContentForPrompt(content: string): string {
-  // Old workspace templates otherwise route Claude subscriptions to paid extra
-  // usage; heartbeat behavior remains in the actual scheduled user turn.
+  // Old workspace templates otherwise route Claude subscriptions to paid extra usage.
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
@@ -75,28 +74,22 @@ export function buildProjectContextSection(files: ReturnType<typeof prepareConte
     return [];
   }
   const lines = ["# Project Context", ""];
-  const hasSoulFile = files.some((file) => file.basename === "soul.md");
-  const hasMemoryFile = files.some((file) => file.basename === "memory.md");
-  const hasUserFile = files.some((file) => file.basename === "user.md");
   lines.push("Loaded project context:");
-  if (hasSoulFile) {
-    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
-  }
-  if (hasMemoryFile) {
-    const hasScopedMemory = files.some(
-      (file) =>
-        file.basename === "memory.md" && /(?:^|\/)memory\/(?:Channel|User)\//u.test(file.path),
-    );
-    lines.push(
-      hasScopedMemory
-        ? "Curated MEMORY.md files contain Workspace, Channel, Thread, or User facts and decisions. Their source paths identify the scope; use them when relevant unless higher-priority instructions override."
-        : "memory/MEMORY.md: Workspace-global durable facts and decisions; use when relevant unless higher-priority instructions override.",
-    );
-  }
-  if (hasUserFile) {
-    lines.push(
+  const hasScopedMemory = files.some(
+    (file) =>
+      file.basename === "memory.md" && /(?:^|\/)memory\/(?:Channel|User)\//u.test(file.path),
+  );
+  for (const [basename, guidance] of Object.entries({
+    "soul.md": "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
+    "memory.md": hasScopedMemory
+      ? "Curated MEMORY.md files contain Workspace, Channel, Thread, or User facts and decisions. Their source paths identify the scope; use them when relevant unless higher-priority instructions override."
+      : "memory/MEMORY.md: Workspace-global durable facts and decisions; use when relevant unless higher-priority instructions override.",
+    "user.md":
       "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-    );
+  })) {
+    if (files.some((file) => file.basename === basename)) {
+      lines.push(guidance);
+    }
   }
   if (files.some(({ file }) => file.personalUser)) {
     lines.push(PERSONAL_USER_CONTEXT_INSTRUCTIONS);

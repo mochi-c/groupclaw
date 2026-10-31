@@ -108,11 +108,9 @@ function resolveDreamFragmentPolicy(
     throw new Error("Dream Fragment no longer matches its canonical session scope");
   }
   const targets = context.artifacts
-    .filter(
-      (artifact) =>
-        (artifact.layer !== "workspace" || group.workspaceShared) &&
-        (artifact.scope.kind !== "user" || group.userIds.includes(artifact.scope.userId)),
-    )
+    // The host context already admits the configured roster and this public
+    // Thread's observed contributors; both are eligible personal subjects.
+    .filter((artifact) => artifact.layer !== "workspace" || group.workspaceShared)
     .map((artifact) => ({
       path: artifact.relativePath,
       kind: artifact.scope.kind,

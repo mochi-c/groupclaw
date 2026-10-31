@@ -12,6 +12,7 @@ export type MemoryPathFilter = NonNullable<
 export function buildMemoryPathFilter(
   filter: MemoryPathFilter | undefined,
   alias?: string,
+  dialect: "sqlite" | "postgres" = "sqlite",
 ): { sql: string; params: string[] } {
   if (!filter) {
     return { sql: "", params: [] };
@@ -20,15 +21,20 @@ export function buildMemoryPathFilter(
   const source = alias ? `${alias}.source` : "source";
   const clauses = [`${source} <> 'memory'`];
   const params: string[] = [];
+  const position = (value: string) =>
+    `${dialect === "postgres" ? "strpos" : "instr"}(${column}, ${value})`;
   if (filter.includeOutsideMemory) {
-    clauses.push(`instr(${column}, 'memory/') <> 1`);
+    clauses.push(`${position("'memory/'")} <> 1`);
   }
   if (filter.exactPaths.length > 0) {
-    clauses.push(`${column} COLLATE BINARY IN (${filter.exactPaths.map(() => "?").join(", ")})`);
+    const collation = dialect === "postgres" ? '"C"' : "BINARY";
+    clauses.push(
+      `${column} COLLATE ${collation} IN (${filter.exactPaths.map(() => "?").join(", ")})`,
+    );
     params.push(...filter.exactPaths);
   }
   for (const prefix of filter.directoryPrefixes) {
-    clauses.push(`instr(${column}, ?) = 1`);
+    clauses.push(`${position("?")} = 1`);
     params.push(prefix);
   }
   return { sql: ` AND (${clauses.join(" OR ")})`, params };
@@ -43,21 +49,13 @@ export type MemorySearchRow = {
   source: MemorySource;
 };
 
-export type SearchRowResult = {
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  score: number;
-  snippet: string;
-  source: MemorySource;
-};
+export type SearchRowResult = ReturnType<typeof projectMemorySearchRow>;
 
 export function projectMemorySearchRow(
   row: MemorySearchRow,
   snippetMaxChars: number,
   score: number,
-): SearchRowResult {
+) {
   return {
     id: row.id,
     path: row.path,

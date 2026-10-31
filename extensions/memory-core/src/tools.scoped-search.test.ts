@@ -14,17 +14,21 @@ import { patchSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/sessio
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { markDreamSessionEnded } from "./dreaming-fragment-state.js";
 import { appendAgentMemoryFragmentFile } from "./fragment-memory-write.js";
+import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./memory/index.js";
 import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { createMemoryContextReadTool } from "./tools.context-read.js";
-import { createMemoryReadTool, createMemorySearchTool } from "./tools.js";
+import { createMemoryReadTool, createMemorySearchTool, testing } from "./tools.js";
 
 describe("authorized cross-discussion memory search", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
-  afterEach(() => resetPluginRuntimeStateForTest());
+  afterEach(() => {
+    testing.resetMemorySearchToolCooldowns();
+    resetPluginRuntimeStateForTest();
+  });
 
   it("finds public same-group history, expands refs, and revokes access without widening Context", async () => {
     const cfg = fixture.createConfig({ vectorEnabled: false });
@@ -196,12 +200,12 @@ describe("authorized cross-discussion memory search", () => {
       update: (entry) => ({ ...entry!, sessionId: randomUUID() }),
       skipMaintenance: true,
     });
-    const manager = fixture.requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
-    fixture.trackManager(manager);
+    const manager = await fixture.getFreshManager(cfg);
     await manager.sync({ force: true, reason: "test" });
     const options = {
       config: cfg,
       getConfig: () => cfg,
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
       agentId: "main",
       agentSessionKey: current.sessionKey,
       memoryAudience: {
@@ -220,6 +224,7 @@ describe("authorized cross-discussion memory search", () => {
       corpus: "memory",
       maxResults: 20,
     });
+    expect(result.details).not.toMatchObject({ unavailable: true });
     const hits = (result.details as { results: Array<{ path: string; ref: string }> }).results;
     expect(hits.map((hit) => hit.path).toSorted()).toEqual(
       [current, sibling, otherChannel, launch].map((source) => source.relativePath).toSorted(),
@@ -271,6 +276,9 @@ describe("authorized cross-discussion memory search", () => {
     ).not.toContain(otherChannel.relativePath);
 
     for (const phase of ["retrieval", "deadline"] as const) {
+      // Each revocation phase starts a fresh call; the previous denial can put
+      // the tool in its ordinary one-minute failure cooldown.
+      testing.resetMemorySearchToolCooldowns();
       cfg.channels.discord!.guilds!["900"]!.channels!["300"]!.members = ["1", "2"];
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
@@ -278,7 +286,12 @@ describe("authorized cross-discussion memory search", () => {
         entered.resolve();
         await release.promise;
       };
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      // Advance admission timers while waiting for the real session/database
+      // workers; the deadline is still advanced explicitly after provider entry.
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "Date"],
+        shouldAdvanceTime: true,
+      });
       const execution = search.execute(`revoked-${phase}`, {
         query: "Orchid",
         corpus: "memory",
@@ -286,7 +299,12 @@ describe("authorized cross-discussion memory search", () => {
       });
       void execution.catch(() => {});
       try {
-        await entered.promise;
+        await Promise.race([
+          entered.promise,
+          execution.then(() => {
+            throw new Error("Search completed before the held embedding operation");
+          }),
+        ]);
         cfg.channels.discord!.guilds!["900"]!.channels!["300"]!.members = ["9"];
         if (phase === "deadline") {
           await vi.advanceTimersByTimeAsync(30_000);

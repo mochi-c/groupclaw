@@ -49,6 +49,7 @@ let getManagerImpl:
   | ((params: MemoryManagerParams) => Promise<{
       manager?: unknown;
       error?: string;
+      code?: string;
       debug?: MemoryManagerDebug;
     }>)
   | undefined;
@@ -83,9 +84,10 @@ const stubManager = {
   close: vi.fn(async () => await closeImpl()),
 };
 
-const getMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) =>
-  getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
-);
+const getMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) => ({
+  debug: { backend: "builtin", purpose: params.purpose ?? "default", managerMs: 0 },
+  ...(getManagerImpl ? await getManagerImpl(params) : { manager: stubManager }),
+}));
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );

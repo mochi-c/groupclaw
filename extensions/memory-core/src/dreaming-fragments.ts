@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import type { resolveMemoryDeepDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { DREAM_FRAGMENT_SYSTEM_PROMPT, parseDreamFragmentPlan } from "./dreaming-fragment-plan.js";
 import {
   withAdmittedDreamSources,
@@ -31,9 +32,14 @@ import {
 type Params = DreamFragmentAdmissionParams & {
   agentId: string;
   subagent: DreamingCompletion;
+  execution: ReturnType<typeof resolveMemoryDeepDreamingConfig>["execution"];
   nowMs: number;
   logger: { info(message: string): void; warn(message: string): void };
 };
+
+const MAX_DREAM_TARGET_CHARS = 48_000;
+const DREAM_TIMEOUT_MS = { fast: 60_000, balanced: 120_000, slow: 240_000 };
+const DREAM_OUTPUT_TOKENS = { cheap: 4_000, medium: 8_000, expensive: 16_000 };
 
 function chooseSources(sources: DreamFragmentSource[], nowMs: number): DreamFragmentSource[] {
   const pending = sources.filter(
@@ -245,7 +251,10 @@ async function runAdmittedFragmentDreaming(params: Params): Promise<void> {
           }
           let targetChars = 0;
           const boundedTargets = targetVersions.filter((target) => {
-            if (target.content.length > 48_000 || targetChars + target.content.length > 96_000) {
+            if (
+              target.content.length > MAX_DREAM_TARGET_CHARS ||
+              targetChars + target.content.length > 96_000
+            ) {
               params.logger.warn("memory-core: Dream deferred an oversized target");
               return false;
             }
@@ -291,7 +300,12 @@ async function runAdmittedFragmentDreaming(params: Params): Promise<void> {
               archive: Boolean(target.archive),
             })),
           }),
-          timeoutMs: 120_000,
+          model: params.execution.model,
+          reasoning: params.execution.thinking,
+          maxTokens:
+            params.execution.maxOutputTokens ?? DREAM_OUTPUT_TOKENS[params.execution.budget],
+          temperature: params.execution.temperature,
+          timeoutMs: params.execution.timeoutMs ?? DREAM_TIMEOUT_MS[params.execution.speed],
         });
         assertCurrent();
         const known = new Set([
@@ -420,6 +434,7 @@ async function runAdmittedFragmentDreaming(params: Params): Promise<void> {
           }
           if (
             publications.length > 8 ||
+            publications.some((publication) => publication.after.length > MAX_DREAM_TARGET_CHARS) ||
             publications.reduce(
               (sum, publication) => sum + publication.before.length + publication.after.length,
               0,

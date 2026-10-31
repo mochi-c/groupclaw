@@ -6,7 +6,7 @@ import { createMemorySessionEndEvent } from "openclaw/plugin-sdk/memory-host-eve
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { markDreamSessionEnded, readDreamFragmentSources } from "./dreaming-fragment-state.js";
-import { listMemorySessionTombstones } from "./memory-entry-origins.js";
+import { findForgottenMemorySessionIds } from "./memory-entry-origins.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 
 /** Capture while the host's bounded reader and handler lease are still admitted. */
@@ -50,12 +50,12 @@ export async function captureDreamEndedSession(
             throw new Error("Ended session store changed during capture");
           }
         };
-        const tombstones = await listMemorySessionTombstones({
+        const tombstones = await findForgottenMemorySessionIds({
           agentId,
           sessionIds: [ctx.sessionId],
         });
         assertCurrent();
-        if (tombstones.length) {
+        if (tombstones.size) {
           return;
         }
         await markDreamSessionEnded({

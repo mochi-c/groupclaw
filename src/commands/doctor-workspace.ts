@@ -1,4 +1,4 @@
-/** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
@@ -8,6 +8,7 @@ import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { statIfExists as statPathIfExists } from "../infra/path-existence.js";
 import {
   LEGACY_UPPERCASE_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -91,18 +92,8 @@ type RootMemoryStatResult = {
 };
 
 async function statIfExists(filePath: string): Promise<RootMemoryStatResult> {
-  try {
-    const stat = await fs.promises.stat(filePath);
-    if (!stat.isFile()) {
-      return { exists: false };
-    }
-    return { exists: true, bytes: stat.size };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return { exists: false };
-    }
-    throw err;
-  }
+  const stat = await statPathIfExists(filePath);
+  return stat?.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
 }
 
 async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> {
@@ -116,7 +107,7 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
   }
 }
 
-async function detectRootMemoryFiles(workspaceDir: string): Promise<RootMemoryFilesDetection> {
+async function detectRootMemoryFiles(workspaceDir: string) {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalWorkspaceMemoryPath(resolvedWorkspace);
   const entries = await listWorkspaceEntries(resolvedWorkspace);
@@ -183,12 +174,7 @@ type RootMemoryMigrationResult = {
   legacyPaths: string[];
   mergedLegacyPaths: string[];
   archivedLegacyPaths: string[];
-  /** True when the repair was skipped because a file exceeded the safe read limit. */
-  readLimitExceeded?: boolean;
-  /** True when the repair was skipped because a file could not be read. */
-  readError?: boolean;
-  /** True when the legacy file could not be archived atomically. */
-  archiveError?: boolean;
+  skipReason?: string;
 };
 
 async function moveLegacyRootMemoryFileToArchive(params: {
@@ -242,33 +228,31 @@ async function migrateLegacyRootMemoryFiles(
     return unchanged;
   }
   const skippedForReadFailure = (err: unknown): RootMemoryMigrationResult => {
-    const isTooLarge =
-      typeof err === "object" &&
-      err !== null &&
-      "message" in err &&
-      typeof (err as Error).message === "string" &&
-      (err as Error).message.startsWith("File exceeds");
+    const message = err instanceof Error ? err.message : "";
     return {
       ...unchanged,
-      readLimitExceeded: isTooLarge,
-      readError: !isTooLarge,
+      skipReason: message.startsWith("File exceeds")
+        ? "a file exceeded the safe read limit"
+        : message.startsWith("File is not valid UTF-8:")
+          ? message
+          : "a file could not be read",
     };
   };
+  const readMemoryFile = async (filePath: string) => {
+    const { buffer } = await readRegularFile({ filePath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES });
+    if (!isUtf8(buffer)) {
+      throw new Error(
+        `File is not valid UTF-8: ${filePath}; preserve its bytes and convert a copy to UTF-8 before retrying`,
+      );
+    }
+    return buffer.toString("utf-8");
+  };
   try {
-    // Reject oversized, unreadable, symlinked, or non-regular inputs before the
+    // Reject unsafe inputs, including invalid UTF-8, before the
     // archive rename. The archived snapshot is read again after the atomic move.
     await Promise.all([
-      ...(detection.canonicalExists
-        ? [
-            readRegularFile({
-              filePath: detection.canonicalPath,
-              maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-            }),
-          ]
-        : []),
-      ...detection.legacyFiles.map((legacy) =>
-        readRegularFile({ filePath: legacy.path, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES }),
-      ),
+      ...(detection.canonicalExists ? [readMemoryFile(detection.canonicalPath)] : []),
+      ...detection.legacyFiles.map((legacy) => readMemoryFile(legacy.path)),
     ]);
   } catch (err) {
     return skippedForReadFailure(err);
@@ -288,25 +272,16 @@ async function migrateLegacyRootMemoryFiles(
       ...unchanged,
       changed: archivedLegacyPaths.length > 0,
       archivedLegacyPaths,
-      archiveError: true,
+      skipReason: "legacy memory could not be archived atomically",
     };
   }
   let canonicalText = "";
   let legacyTexts: string[];
   try {
     if (detection.canonicalExists) {
-      canonicalText = await readRegularFile({
-        filePath: detection.canonicalPath,
-        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
-      }).then(({ buffer }) => buffer.toString("utf-8"));
+      canonicalText = await readMemoryFile(detection.canonicalPath);
     }
-    legacyTexts = await Promise.all(
-      archivedLegacyPaths.map((archivedPath) =>
-        readRegularFile({ filePath: archivedPath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES }).then(
-          ({ buffer }) => buffer.toString("utf-8"),
-        ),
-      ),
-    );
+    legacyTexts = await Promise.all(archivedLegacyPaths.map(readMemoryFile));
   } catch (err) {
     const skipped = skippedForReadFailure(err);
     // The archive is the independent recovery copy. Do not link or copy it
@@ -338,6 +313,7 @@ async function migrateLegacyRootMemoryFiles(
   await fs.promises.mkdir(path.dirname(detection.canonicalPath), { recursive: true });
   await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
   return {
+    ...unchanged,
     changed: true,
     canonicalPath: detection.canonicalPath,
     legacyPaths: detection.legacyFiles.map((entry) => entry.path),
@@ -354,9 +330,8 @@ type WorkspaceMemoryDoctorScope = {
 
 export async function noteWorkspaceMemoryHealth(scope: WorkspaceMemoryDoctorScope): Promise<void> {
   try {
-    const rootMemoryWarning = formatRootMemoryFilesWarning(
-      await detectRootMemoryFiles(scope.workspaceDir),
-    );
+    const detection = await detectRootMemoryFiles(scope.workspaceDir);
+    const rootMemoryWarning = formatRootMemoryFilesWarning(detection);
     if (rootMemoryWarning) {
       note(
         `${scope.labelAgent ? `Agent "${scope.agentId}":\n` : ""}${rootMemoryWarning}`,
@@ -391,10 +366,8 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const migration = await migrateLegacyRootMemoryFiles(params.scope.workspaceDir);
-    if (migration.readLimitExceeded || migration.readError) {
-      const reason = migration.readLimitExceeded
-        ? "a file exceeded the safe read limit"
-        : "a file could not be read";
+    const reason = migration.skipReason;
+    if (reason) {
       note(
         [
           `${prefix}Workspace memory root repair skipped (${reason}):`,
@@ -406,17 +379,6 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
         ]
           .filter((line): line is string => Boolean(line))
           .join("\n"),
-        "Doctor changes",
-      );
-      return;
-    }
-    if (migration.archiveError) {
-      note(
-        [
-          `${prefix}Workspace memory root repair skipped (legacy memory could not be archived atomically):`,
-          `- canonical: ${migration.canonicalPath}`,
-          ...migration.legacyPaths.map((legacyPath) => `- legacy: ${legacyPath}`),
-        ].join("\n"),
         "Doctor changes",
       );
       return;
